@@ -2,37 +2,39 @@ LIBRARY IEEE;
 USE IEEE.STD_LOGIC_1164.ALL;
 USE IEEE.NUMERIC_STD.ALL;
 
+--! @brief Image Convolution Core Package
+--! @details Defines constants, data types, and conversion functions for multi-scale 2D image convolution (1x1 to 7x7).
 PACKAGE conv_pkg IS
 
-    -- Maximum kernel size (7x7) to support dynamic 1x1, 3x3, 5x5, 7x7
-    CONSTANT MAX_KERNEL_SIZE  : INTEGER := 7;
-    CONSTANT MAX_KERNEL_ELEMS : INTEGER := MAX_KERNEL_SIZE * MAX_KERNEL_SIZE; -- 49
-    CONSTANT CENTER_ROW       : INTEGER := 3;
-    CONSTANT CENTER_COL       : INTEGER := 3;
-    CONSTANT CENTER_ELEM      : INTEGER := 24; -- 3 * 7 + 3
+    CONSTANT MAX_KERNEL_SIZE  : INTEGER := 7;                                 --! Maximum kernel window dimension (7x7) supporting dynamic scaling
+    CONSTANT MAX_KERNEL_ELEMS : INTEGER := MAX_KERNEL_SIZE * MAX_KERNEL_SIZE; --! Total element count in maximum 7x7 spatial filter window (49)
+    CONSTANT CENTER_ROW       : INTEGER := 3;                                 --! Row index of the center kernel element (0-indexed)
+    CONSTANT CENTER_COL       : INTEGER := 3;                                 --! Column index of the center kernel element (0-indexed)
+    CONSTANT CENTER_ELEM      : INTEGER := 24;                                --! Linear flattened array index of the center pixel (3 * 7 + 3)
 
-    -- Backward-compatible aliases
-    CONSTANT KERNEL_SIZE      : INTEGER := MAX_KERNEL_SIZE;
-    CONSTANT KERNEL_ELEMS     : INTEGER := MAX_KERNEL_ELEMS;
+    CONSTANT KERNEL_SIZE      : INTEGER := MAX_KERNEL_SIZE;                   --! Backward-compatible alias for MAX_KERNEL_SIZE
+    CONSTANT KERNEL_ELEMS     : INTEGER := MAX_KERNEL_ELEMS;                  --! Backward-compatible alias for MAX_KERNEL_ELEMS
 
-    -- 8-bit color channels
+    --! 8-bit unsigned pixel channel data type
     SUBTYPE byte_t IS UNSIGNED(7 DOWNTO 0);
     
-    -- 24-bit RGB pixel record
+    --! 24-bit RGB color pixel record containing individual 8-bit color channels
     TYPE rgb_pixel_t IS RECORD
-        r : byte_t;
-        g : byte_t;
-        b : byte_t;
+        r : byte_t; --! 8-bit red color channel intensity
+        g : byte_t; --! 8-bit green color channel intensity
+        b : byte_t; --! 8-bit blue color channel intensity
     END RECORD;
 
-    -- Array of 49 bytes for one color channel across the 7x7 window
+    --! Flattened 49-element array representing one color channel across the 7x7 window
     TYPE window_channel_t IS ARRAY (0 TO MAX_KERNEL_ELEMS - 1) OF byte_t;
 
-    -- Array of 49 signed weights for kernel coefficients
+    --! Flattened 49-element array of signed 16-bit convolution kernel coefficients
     TYPE kernel_weights_t IS ARRAY (0 TO MAX_KERNEL_ELEMS - 1) OF SIGNED(15 DOWNTO 0);
 
-    -- Helper functions to pack/unpack 24-bit std_logic_vector
+    --! Unpacks a 24-bit std_logic_vector (R=23..16, G=15..8, B=7..0) into an rgb_pixel_t record
     FUNCTION slv_to_rgb(slv : STD_LOGIC_VECTOR(23 DOWNTO 0)) RETURN rgb_pixel_t;
+
+    --! Packs an rgb_pixel_t record into a 24-bit std_logic_vector (R=23..16, G=15..8, B=7..0)
     FUNCTION rgb_to_slv(rgb : rgb_pixel_t) RETURN STD_LOGIC_VECTOR;
 
 END PACKAGE conv_pkg;

@@ -3,40 +3,31 @@ USE IEEE.STD_LOGIC_1164.ALL;
 USE IEEE.NUMERIC_STD.ALL;
 USE WORK.conv_pkg.ALL;
 
--- =============================================================================
--- Top-Level Synthesizable Image Convolution Hardware Accelerator (CPU)
--- Integrates:
---   - 6-Bit Dynamic Instruction Decoder (Radius R=0..3, Unit Select, Filter Opcode)
---   - Dynamic Multi-Scale Dual/Multi-Row Line Buffer & Window Generator
---   - 49-Multiplier Direct Spatial Convolution ALU
---   - 49-Element Systolic Matrix Multiplier MMU
---   - Hardware Performance Cycle Counter & Master FSM
--- =============================================================================
-
+--! @brief Top-Level Synthesizable Image Convolution Hardware Accelerator (CPU)
+--! @details Top-level processor integrating the 6-bit instruction decoder, 6-line BRAM buffer with 7x7 window generator, 49-multiplier direct spatial ALU, 49-PE systolic MMU, and master execution FSM with hardware cycle counter.
 ENTITY CPU IS
     GENERIC (
-        IMG_WIDTH  : INTEGER := 100;
-        IMG_HEIGHT : INTEGER := 100
+        IMG_WIDTH  : INTEGER := 100; --! Image width in pixels
+        IMG_HEIGHT : INTEGER := 100  --! Image height in pixels
     );
     PORT (
-        CLK             : IN  STD_LOGIC;
-        RESET           : IN  STD_LOGIC;
-        ENABLE          : IN  STD_LOGIC;
-        INSTRUCTION_RAW : IN  STD_LOGIC_VECTOR(5 DOWNTO 0);
-        -- Streaming pixel interface
-        PIXEL_IN        : IN  STD_LOGIC_VECTOR(23 DOWNTO 0);
-        PIXEL_VALID_IN  : IN  STD_LOGIC;
-        PIXEL_OUT       : OUT STD_LOGIC_VECTOR(23 DOWNTO 0);
-        PIXEL_VALID_OUT : OUT STD_LOGIC;
-        BUSY            : OUT STD_LOGIC;
-        DONE            : OUT STD_LOGIC;
-        CYCLE_COUNT     : OUT UNSIGNED(31 DOWNTO 0)
+        CLK             : IN  STD_LOGIC;                           --! Primary system clock input
+        RESET           : IN  STD_LOGIC;                           --! Synchronous active-high master reset
+        ENABLE          : IN  STD_LOGIC;                           --! Accelerator run enable control
+        INSTRUCTION_RAW : IN  STD_LOGIC_VECTOR(5 DOWNTO 0);        --! 6-bit packed filter configuration instruction
+        PIXEL_IN        : IN  STD_LOGIC_VECTOR(23 DOWNTO 0);       --! 24-bit input streaming RGB pixel
+        PIXEL_VALID_IN  : IN  STD_LOGIC;                           --! Strobe indicating input pixel is valid
+        PIXEL_OUT       : OUT STD_LOGIC_VECTOR(23 DOWNTO 0);       --! 24-bit convolved output RGB pixel
+        PIXEL_VALID_OUT : OUT STD_LOGIC;                           --! Strobe indicating output pixel is valid
+        BUSY            : OUT STD_LOGIC;                           --! High during image frame convolution processing
+        DONE            : OUT STD_LOGIC;                           --! High when complete frame has been convolved
+        CYCLE_COUNT     : OUT UNSIGNED(31 DOWNTO 0)                --! Hardware performance execution cycle counter
     );
 END ENTITY CPU;
 
 ARCHITECTURE RTL OF CPU IS
 
-    CONSTANT TOTAL_PIXELS : INTEGER := IMG_WIDTH * IMG_HEIGHT;
+    CONSTANT TOTAL_PIXELS : INTEGER := IMG_WIDTH * IMG_HEIGHT; --! Total pixel count per image frame
 
     -- Subcomponents
     COMPONENT DECODER IS
@@ -102,33 +93,52 @@ ARCHITECTURE RTL OF CPU IS
         );
     END COMPONENT MMU;
 
-    -- State Machine
+    --! Top-level controller finite state machine states
     TYPE state_t IS (ST_IDLE, ST_RUN, ST_COMPLETE);
+    --! Current state of the top-level convolution controller
     SIGNAL state : state_t := ST_IDLE;
 
-    -- Internal Signals
+    --! Decoded 3-bit filter opcode
     SIGNAL opcode         : STD_LOGIC_VECTOR(2 DOWNTO 0);
+    --! Decoded kernel border radius (0=1x1, 1=3x3, 2=5x5, 3=7x7)
     SIGNAL radius         : INTEGER RANGE 0 TO 3 := 0;
+    --! Decoded execution unit selector ('0' = ALU, '1' = MMU)
     SIGNAL unit_select    : STD_LOGIC;
+    --! Decoded 49-element kernel weights array
     SIGNAL weights        : kernel_weights_t;
+    --! Decoded normalization divisor factor
     SIGNAL divisor        : INTEGER RANGE 1 TO 256;
 
+    --! Red channel 7x7 sliding window vector from line buffer
     SIGNAL window_r       : window_channel_t := (OTHERS => (OTHERS => '0'));
+    --! Green channel 7x7 sliding window vector from line buffer
     SIGNAL window_g       : window_channel_t := (OTHERS => (OTHERS => '0'));
+    --! Blue channel 7x7 sliding window vector from line buffer
     SIGNAL window_b       : window_channel_t := (OTHERS => (OTHERS => '0'));
+    --! Strobe indicating sliding window data is valid
     SIGNAL window_valid   : STD_LOGIC := '0';
+    --! Frame completion strobe from line buffer
     SIGNAL lb_frame_done  : STD_LOGIC := '0';
+    --! Busy status flag from line buffer
     SIGNAL lb_busy        : STD_LOGIC := '0';
 
+    --! ALU execution enable signal
     SIGNAL enable_alu     : STD_LOGIC := '0';
+    --! 24-bit convolved RGB pixel output from ALU
     SIGNAL alu_pixel_out  : STD_LOGIC_VECTOR(23 DOWNTO 0) := (OTHERS => '0');
+    --! Output pixel valid strobe from ALU
     SIGNAL alu_valid_out  : STD_LOGIC := '0';
 
+    --! MMU execution enable signal
     SIGNAL enable_mmu     : STD_LOGIC := '0';
+    --! 24-bit convolved RGB pixel output from MMU
     SIGNAL mmu_pixel_out  : STD_LOGIC_VECTOR(23 DOWNTO 0) := (OTHERS => '0');
+    --! Output pixel valid strobe from MMU
     SIGNAL mmu_valid_out  : STD_LOGIC := '0';
 
+    --! Internal 32-bit execution cycle counter
     SIGNAL cycle_cnt      : UNSIGNED(31 DOWNTO 0) := (OTHERS => '0');
+    --! Processed output pixel count tracker
     SIGNAL out_count      : INTEGER RANGE 0 TO TOTAL_PIXELS := 0;
 
 BEGIN
@@ -202,7 +212,8 @@ BEGIN
     CYCLE_COUNT     <= cycle_cnt;
 
     -- Control FSM & Performance Cycle Counter
-    PROCESS (CLK)
+    --! Master control FSM and performance cycle counter process
+    fsm_cycle_proc : PROCESS (CLK)
         VARIABLE cur_valid_out : STD_LOGIC;
     BEGIN
         IF RISING_EDGE(CLK) THEN
@@ -268,6 +279,6 @@ BEGIN
                 END CASE;
             END IF;
         END IF;
-    END PROCESS;
+    END PROCESS fsm_cycle_proc;
 
 END ARCHITECTURE RTL;

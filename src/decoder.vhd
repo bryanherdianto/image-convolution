@@ -3,29 +3,24 @@ USE IEEE.STD_LOGIC_1164.ALL;
 USE IEEE.NUMERIC_STD.ALL;
 USE WORK.conv_pkg.ALL;
 
--- =============================================================================
--- Dynamic Combinational Instruction Decoder
--- Decodes 6-bit instruction into:
---   Bits [5:4]: Kernel Size / Border Radius R (00=1x1, 01=3x3, 10=5x5, 11=7x7)
---   Bit  [3]  : Unit Select ('0' = ALU, '1' = MMU)
---   Bits [2:0]: Filter Opcode (000 to 111)
--- Populates 49 kernel weights (zero-masked outside active radius) and divisor
--- =============================================================================
-
+--! @brief Dynamic Combinational Instruction Decoder
+--! @details Decodes a 6-bit instruction into kernel radius (bits 5:4), accelerator unit select (bit 3), and filter opcode (bits 2:0), generating 49 spatial filter weights and divisor.
 ENTITY DECODER IS
     PORT (
-        INSTRUCTION  : IN  STD_LOGIC_VECTOR(5 DOWNTO 0);
-        OPCODE       : OUT STD_LOGIC_VECTOR(2 DOWNTO 0);
-        RADIUS       : OUT INTEGER RANGE 0 TO 3;
-        UNIT_SELECT  : OUT STD_LOGIC; -- '0' = ALU, '1' = MMU
-        WEIGHTS      : OUT kernel_weights_t;
-        DIVISOR      : OUT INTEGER RANGE 1 TO 256
+        INSTRUCTION  : IN  STD_LOGIC_VECTOR(5 DOWNTO 0); --! 6-bit packed filter configuration instruction
+        OPCODE       : OUT STD_LOGIC_VECTOR(2 DOWNTO 0); --! 3-bit decoded filter operation opcode
+        RADIUS       : OUT INTEGER RANGE 0 TO 3;         --! Decoded kernel border radius (0=1x1, 1=3x3, 2=5x5, 3=7x7)
+        UNIT_SELECT  : OUT STD_LOGIC;                    --! Target processing unit select ('0' = ALU, '1' = MMU)
+        WEIGHTS      : OUT kernel_weights_t;             --! 49 signed 16-bit decoded convolution weights
+        DIVISOR      : OUT INTEGER RANGE 1 TO 256        --! Decoded normalization divisor factor
     );
 END ENTITY DECODER;
 
 ARCHITECTURE RTL OF DECODER IS
 
+    --! Upper 2 bits of instruction selecting kernel radius [5:4]
     SIGNAL size_code : STD_LOGIC_VECTOR(1 DOWNTO 0);
+    --! Lower 3 bits of instruction selecting filter operation opcode [2:0]
     SIGNAL op_code   : STD_LOGIC_VECTOR(2 DOWNTO 0);
 
 BEGIN
@@ -36,7 +31,8 @@ BEGIN
     OPCODE      <= op_code;
     RADIUS      <= to_integer(unsigned(size_code));
 
-    PROCESS (size_code, op_code)
+    --! Combinational kernel weights and divisor lookup process
+    decode_proc : PROCESS (size_code, op_code)
         VARIABLE w : kernel_weights_t;
         VARIABLE d : INTEGER RANGE 1 TO 256;
     BEGIN
@@ -48,21 +44,17 @@ BEGIN
 
         CASE size_code IS
 
-            --------------------------------------------------------------------
             -- 00: 1x1 Identity / Passthrough Mode (Radius R = 0)
             -- Only dead-center weight (3,3, index 24) is active!
-            --------------------------------------------------------------------
             WHEN "00" =>
                 w(CENTER_ELEM) := to_signed(1, 16);
                 d := 1;
 
-            --------------------------------------------------------------------
             -- 01: 3x3 Dynamic Mode (Radius R = 1)
             -- Active indices: row 2..4, col 2..4 centered at (3,3)
             --   Row 2: 16, 17, 18
             --   Row 3: 23, 24, 25 (center 24)
             --   Row 4: 30, 31, 32
-            --------------------------------------------------------------------
             WHEN "01" =>
                 CASE op_code IS
                     -- 000: Box Blur 3x3 (1/9 everywhere)
@@ -122,10 +114,8 @@ BEGIN
                         d := 100;
                 END CASE;
 
-            --------------------------------------------------------------------
             -- 10: 5x5 Dynamic Mode (Radius R = 2)
             -- Active indices: row 1..5, col 1..5 centered at (3,3)
-            --------------------------------------------------------------------
             WHEN "10" =>
                 CASE op_code IS
                     -- 000: Box Blur 5x5 (1/25)
@@ -207,10 +197,8 @@ BEGIN
                         d := 256;
                 END CASE;
 
-            --------------------------------------------------------------------
             -- 11: 7x7 Dynamic Mode (Radius R = 3)
             -- All 49 weights active (rows 0..6, cols 0..6)
-            --------------------------------------------------------------------
             WHEN OTHERS =>
                 CASE op_code IS
                     -- 000: Box Blur 7x7 (1/49)
@@ -314,6 +302,6 @@ BEGIN
 
         WEIGHTS <= w;
         DIVISOR <= d;
-    END PROCESS;
+    END PROCESS decode_proc;
 
 END ARCHITECTURE RTL;

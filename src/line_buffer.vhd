@@ -3,72 +3,77 @@ USE IEEE.STD_LOGIC_1164.ALL;
 USE IEEE.NUMERIC_STD.ALL;
 USE WORK.conv_pkg.ALL;
 
--- =============================================================================
--- Dynamic Multi-Scale Line Buffer & Window Generator
--- Houses 6 on-chip Block RAM line buffers and a 7x7 window register array.
--- Dynamically supports:
---   Radius R = 0 (1x1 Identity / Passthrough)
---   Radius R = 1 (3x3 Kernel)
---   Radius R = 2 (5x5 Kernel)
---   Radius R = 3 (7x7 Kernel)
--- Center pixel latency is uniformly 3 * IMG_WIDTH + 3 for all modes,
--- guaranteeing glitch-free video streaming and identical phase alignment.
--- =============================================================================
-
+--! @brief Dynamic Multi-Scale Line Buffer & Window Generator
+--! @details Manages 6 on-chip Block RAM circular line buffers and a 7x7 sliding window register array with boundary zero-padding for radius R=0..3.
 ENTITY LINE_BUFFER IS
     GENERIC (
-        IMG_WIDTH  : INTEGER := 1000;
-        IMG_HEIGHT : INTEGER := 1000
+        IMG_WIDTH  : INTEGER := 1000; --! Maximum supported image width in pixels
+        IMG_HEIGHT : INTEGER := 1000  --! Maximum supported image height in pixels
     );
     PORT (
-        CLK          : IN  STD_LOGIC;
-        RST          : IN  STD_LOGIC;
-        RADIUS       : IN  INTEGER RANGE 0 TO 3;
-        VALID_IN     : IN  STD_LOGIC;
-        PIXEL_IN     : IN  STD_LOGIC_VECTOR(23 DOWNTO 0);
-        WINDOW_R     : OUT window_channel_t;
-        WINDOW_G     : OUT window_channel_t;
-        WINDOW_B     : OUT window_channel_t;
-        WINDOW_VALID : OUT STD_LOGIC;
-        FRAME_DONE   : OUT STD_LOGIC;
-        BUSY         : OUT STD_LOGIC
+        CLK          : IN  STD_LOGIC;                           --! Primary system clock input
+        RST          : IN  STD_LOGIC;                           --! Synchronous active-high reset signal
+        RADIUS       : IN  INTEGER RANGE 0 TO 3;                --! Kernel border radius (0=1x1, 1=3x3, 2=5x5, 3=7x7)
+        VALID_IN     : IN  STD_LOGIC;                           --! Strobe indicating input pixel is valid
+        PIXEL_IN     : IN  STD_LOGIC_VECTOR(23 DOWNTO 0);       --! 24-bit input streaming RGB pixel
+        WINDOW_R     : OUT window_channel_t;                    --! 49-element red channel spatial sliding window
+        WINDOW_G     : OUT window_channel_t;                    --! 49-element green channel spatial sliding window
+        WINDOW_B     : OUT window_channel_t;                    --! 49-element blue channel spatial sliding window
+        WINDOW_VALID : OUT STD_LOGIC;                           --! Strobe indicating current window pixels are valid
+        FRAME_DONE   : OUT STD_LOGIC;                           --! Strobe indicating frame processing completion
+        BUSY         : OUT STD_LOGIC                            --! High while streaming pixels or flushing pipeline
     );
 END ENTITY LINE_BUFFER;
 
 ARCHITECTURE RTL OF LINE_BUFFER IS
 
-    CONSTANT TOTAL_PIXELS   : INTEGER := IMG_WIDTH * IMG_HEIGHT;
-    CONSTANT CENTER_LATENCY : INTEGER := 3 * IMG_WIDTH + 4;
-    CONSTANT FLUSH_CYCLES   : INTEGER := 3 * IMG_WIDTH + 6;
+    CONSTANT TOTAL_PIXELS   : INTEGER := IMG_WIDTH * IMG_HEIGHT; --! Total pixel count per image frame
+    CONSTANT CENTER_LATENCY : INTEGER := 3 * IMG_WIDTH + 4;      --! Latency cycles until center pixel is aligned in 7x7 window
+    CONSTANT FLUSH_CYCLES   : INTEGER := 3 * IMG_WIDTH + 6;      --! Post-frame pipeline flush cycles
 
-    -- 6 Line Buffers implemented via BRAM / M10K blocks
+    --! Single-line BRAM circular memory buffer type holding one image row
     TYPE line_ram_t IS ARRAY (0 TO IMG_WIDTH - 1) OF rgb_pixel_t;
+
+    --! Line RAM 0 storing the most recent buffered image row
     SIGNAL line_ram_0 : line_ram_t := (OTHERS => (r => (OTHERS => '0'), g => (OTHERS => '0'), b => (OTHERS => '0')));
+    --! Line RAM 1 storing the second buffered image row
     SIGNAL line_ram_1 : line_ram_t := (OTHERS => (r => (OTHERS => '0'), g => (OTHERS => '0'), b => (OTHERS => '0')));
+    --! Line RAM 2 storing the third buffered image row
     SIGNAL line_ram_2 : line_ram_t := (OTHERS => (r => (OTHERS => '0'), g => (OTHERS => '0'), b => (OTHERS => '0')));
+    --! Line RAM 3 storing the fourth buffered image row
     SIGNAL line_ram_3 : line_ram_t := (OTHERS => (r => (OTHERS => '0'), g => (OTHERS => '0'), b => (OTHERS => '0')));
+    --! Line RAM 4 storing the fifth buffered image row
     SIGNAL line_ram_4 : line_ram_t := (OTHERS => (r => (OTHERS => '0'), g => (OTHERS => '0'), b => (OTHERS => '0')));
+    --! Line RAM 5 storing the sixth buffered image row
     SIGNAL line_ram_5 : line_ram_t := (OTHERS => (r => (OTHERS => '0'), g => (OTHERS => '0'), b => (OTHERS => '0')));
 
-    -- Pointers and Counters
+    --! Circular memory address pointer within the line buffers
     SIGNAL ram_ptr     : INTEGER RANGE 0 TO IMG_WIDTH - 1 := 0;
+    --! Total input pixel counter tracking pixels received
     SIGNAL in_count    : INTEGER RANGE 0 TO TOTAL_PIXELS + FLUSH_CYCLES := 0;
+    --! Counter tracking pipeline flush cycles after frame end
     SIGNAL flush_count : INTEGER RANGE 0 TO FLUSH_CYCLES := 0;
+    --! Total convolved output pixel counter
     SIGNAL out_count   : INTEGER RANGE 0 TO TOTAL_PIXELS := 0;
+    --! Output image column coordinate tracker (0 to IMG_WIDTH - 1)
     SIGNAL out_col     : INTEGER RANGE 0 TO IMG_WIDTH - 1 := 0;
+    --! Output image row coordinate tracker (0 to IMG_HEIGHT - 1)
     SIGNAL out_row     : INTEGER RANGE 0 TO IMG_HEIGHT - 1 := 0;
 
-    -- State Machine
+    --! Line buffer controller finite state machine states
     TYPE state_t IS (ST_IDLE, ST_STREAM, ST_FLUSH, ST_DONE);
+    --! Current state of the line buffer controller state machine
     SIGNAL state : state_t := ST_IDLE;
 
-    -- 7x7 Window Shift Registers: win_reg(row, col)
+    --! 7x7 spatial 2D sliding window shift register matrix
     TYPE win_reg_t IS ARRAY (0 TO 6, 0 TO 6) OF rgb_pixel_t;
+    --! 7x7 spatial window register array holding active neighborhood pixels
     SIGNAL win_reg : win_reg_t := (OTHERS => (OTHERS => (r => (OTHERS => '0'), g => (OTHERS => '0'), b => (OTHERS => '0'))));
 
 BEGIN
 
-    PROCESS (CLK)
+    --! Multi-scale line buffer streaming, window shifting, and zero-padding process
+    line_buffer_fsm_proc : PROCESS (CLK)
         VARIABLE cur_px        : rgb_pixel_t;
         VARIABLE px_zero       : rgb_pixel_t;
         VARIABLE r_px          : win_reg_t; -- Row taps
@@ -97,9 +102,7 @@ BEGIN
                 px_zero.b := (OTHERS => '0');
 
                 CASE state IS
-                    ------------------------------------------------------------
                     -- IDLE: Waiting for first pixel
-                    ------------------------------------------------------------
                     WHEN ST_IDLE =>
                         WINDOW_VALID <= '0';
                         FRAME_DONE   <= '0';
@@ -151,9 +154,7 @@ BEGIN
                             win_reg(6, 6) <= r6;
                         END IF;
 
-                    ------------------------------------------------------------
                     -- STREAM: Streaming active image pixels
-                    ------------------------------------------------------------
                     WHEN ST_STREAM =>
                         BUSY <= '1';
                         IF VALID_IN = '1' THEN
@@ -257,9 +258,7 @@ BEGIN
                             WINDOW_VALID <= '0';
                         END IF;
 
-                    ------------------------------------------------------------
                     -- FLUSH: Feeding zeros to flush remaining rows through center
-                    ------------------------------------------------------------
                     WHEN ST_FLUSH =>
                         BUSY <= '1';
                         cur_px := px_zero;
@@ -345,9 +344,7 @@ BEGIN
                             out_count <= out_count + 1;
                         END IF;
 
-                    ------------------------------------------------------------
                     -- DONE: Completed frame
-                    ------------------------------------------------------------
                     WHEN ST_DONE =>
                         WINDOW_VALID <= '0';
                         FRAME_DONE   <= '1';
@@ -355,6 +352,6 @@ BEGIN
                 END CASE;
             END IF;
         END IF;
-    END PROCESS;
+    END PROCESS line_buffer_fsm_proc;
 
 END ARCHITECTURE RTL;

@@ -3,70 +3,78 @@ USE IEEE.STD_LOGIC_1164.ALL;
 USE IEEE.NUMERIC_STD.ALL;
 USE WORK.conv_pkg.ALL;
 
--- =============================================================================
--- Dynamic Spatial Convolution ALU Accelerator (7x7 / 49-Parallel Multipliers)
--- Pipelined spatial reduction tree:
---   Stage 1: 147 Parallel Multipliers (49 R, 49 G, 49 B)
---   Stage 2: Adder Tree Level 1 (Pairwise reduction: 49 -> 25 sums)
---   Stage 3: Adder Tree Level 2 (Pairwise reduction: 25 -> 13 sums)
---   Stage 4: Adder Tree Level 3 (Final reduction: 13 -> 1 total sum)
---   Stage 5: Normalization (Divisor) and Saturation Clamping to [0, 255]
--- Throughput: 1 RGB pixel per clock cycle
--- Pipeline Latency: 5 clock cycles
--- =============================================================================
-
+--! @brief Dynamic Spatial Convolution ALU Accelerator
+--! @details 49-multiplier pipelined spatial reduction tree executing parallel 2D convolution across RGB color planes.
 ENTITY ALU IS
     PORT (
-        CLK             : IN  STD_LOGIC;
-        RST             : IN  STD_LOGIC;
-        ENABLE_ALU      : IN  STD_LOGIC;
-        WINDOW_R        : IN  window_channel_t;
-        WINDOW_G        : IN  window_channel_t;
-        WINDOW_B        : IN  window_channel_t;
-        WINDOW_VALID    : IN  STD_LOGIC;
-        WEIGHTS         : IN  kernel_weights_t;
-        DIVISOR         : IN  INTEGER RANGE 1 TO 256;
-        PIXEL_OUT       : OUT STD_LOGIC_VECTOR(23 DOWNTO 0);
-        PIXEL_VALID_OUT : OUT STD_LOGIC
+        CLK             : IN  STD_LOGIC;                           --! Primary system clock input
+        RST             : IN  STD_LOGIC;                           --! Synchronous active-high reset signal
+        ENABLE_ALU      : IN  STD_LOGIC;                           --! ALU computation enable control
+        WINDOW_R        : IN  window_channel_t;                    --! 49-element red channel pixel window
+        WINDOW_G        : IN  window_channel_t;                    --! 49-element green channel pixel window
+        WINDOW_B        : IN  window_channel_t;                    --! 49-element blue channel pixel window
+        WINDOW_VALID    : IN  STD_LOGIC;                           --! Strobe indicating current window pixels are valid
+        WEIGHTS         : IN  kernel_weights_t;                    --! 49 signed 16-bit filter kernel weights
+        DIVISOR         : IN  INTEGER RANGE 1 TO 256;              --! Normalization scaling divisor factor
+        PIXEL_OUT       : OUT STD_LOGIC_VECTOR(23 DOWNTO 0);       --! 24-bit convolved RGB output pixel
+        PIXEL_VALID_OUT : OUT STD_LOGIC                            --! Filtered output pixel valid strobe
     );
 END ENTITY ALU;
 
 ARCHITECTURE RTL OF ALU IS
 
-    -- Product types (signed 32-bit: 16-bit signed * 16-bit signed)
+    --! Product array type holding 49 signed 32-bit products
     TYPE prod_array_t IS ARRAY (0 TO 48) OF SIGNED(31 DOWNTO 0);
 
-    -- Pipeline Stage 1: Multiplier outputs
+    --! Stage 1 red channel multiplier products
     SIGNAL prod_r : prod_array_t := (OTHERS => (OTHERS => '0'));
+    --! Stage 1 green channel multiplier products
     SIGNAL prod_g : prod_array_t := (OTHERS => (OTHERS => '0'));
+    --! Stage 1 blue channel multiplier products
     SIGNAL prod_b : prod_array_t := (OTHERS => (OTHERS => '0'));
+    --! Pipeline Stage 1 valid flag
     SIGNAL valid_stage1 : STD_LOGIC := '0';
+    --! Pipeline Stage 1 divisor register
     SIGNAL div_stage1   : INTEGER RANGE 1 TO 256 := 1;
 
-    -- Pipeline Stage 2: Level-1 Adder sums (49 -> 25 sums)
+    --! Level-1 pairwise reduction sum array type (49 to 25 sums)
     TYPE sum_l1_t IS ARRAY (0 TO 24) OF SIGNED(33 DOWNTO 0);
+    --! Stage 2 red channel Level-1 adder sums
     SIGNAL sum_l1_r : sum_l1_t := (OTHERS => (OTHERS => '0'));
+    --! Stage 2 green channel Level-1 adder sums
     SIGNAL sum_l1_g : sum_l1_t := (OTHERS => (OTHERS => '0'));
+    --! Stage 2 blue channel Level-1 adder sums
     SIGNAL sum_l1_b : sum_l1_t := (OTHERS => (OTHERS => '0'));
+    --! Pipeline Stage 2 valid flag
     SIGNAL valid_stage2 : STD_LOGIC := '0';
+    --! Pipeline Stage 2 divisor register
     SIGNAL div_stage2   : INTEGER RANGE 1 TO 256 := 1;
 
-    -- Pipeline Stage 3: Level-2 Adder sums (25 -> 13 sums)
+    --! Level-2 pairwise reduction sum array type (25 to 13 sums)
     TYPE sum_l2_t IS ARRAY (0 TO 12) OF SIGNED(34 DOWNTO 0);
+    --! Stage 3 red channel Level-2 adder sums
     SIGNAL sum_l2_r : sum_l2_t := (OTHERS => (OTHERS => '0'));
+    --! Stage 3 green channel Level-2 adder sums
     SIGNAL sum_l2_g : sum_l2_t := (OTHERS => (OTHERS => '0'));
+    --! Stage 3 blue channel Level-2 adder sums
     SIGNAL sum_l2_b : sum_l2_t := (OTHERS => (OTHERS => '0'));
+    --! Pipeline Stage 3 valid flag
     SIGNAL valid_stage3 : STD_LOGIC := '0';
+    --! Pipeline Stage 3 divisor register
     SIGNAL div_stage3   : INTEGER RANGE 1 TO 256 := 1;
 
-    -- Pipeline Stage 4: Total Channel Sums (36-bit)
+    --! Stage 4 accumulated total sum for red channel
     SIGNAL total_sum_r  : SIGNED(35 DOWNTO 0) := (OTHERS => '0');
+    --! Stage 4 accumulated total sum for green channel
     SIGNAL total_sum_g  : SIGNED(35 DOWNTO 0) := (OTHERS => '0');
+    --! Stage 4 accumulated total sum for blue channel
     SIGNAL total_sum_b  : SIGNED(35 DOWNTO 0) := (OTHERS => '0');
+    --! Pipeline Stage 4 valid flag
     SIGNAL valid_stage4 : STD_LOGIC := '0';
+    --! Pipeline Stage 4 divisor register
     SIGNAL div_stage4   : INTEGER RANGE 1 TO 256 := 1;
 
-    -- Clamping function
+    --! Clamps signed 36-bit accumulator value to 8-bit range [0, 255]
     FUNCTION clamp_byte(val : SIGNED) RETURN byte_t IS
     BEGIN
         IF val < 0 THEN
@@ -80,7 +88,8 @@ ARCHITECTURE RTL OF ALU IS
 
 BEGIN
 
-    PROCESS (CLK)
+    --! 5-stage pipelined spatial convolution reduction and saturation clamping process
+    alu_pipeline_proc : PROCESS (CLK)
         VARIABLE px_s_r, px_s_g, px_s_b       : SIGNED(15 DOWNTO 0);
         VARIABLE scaled_r, scaled_g, scaled_b : SIGNED(35 DOWNTO 0);
         VARIABLE out_px                       : rgb_pixel_t;
@@ -95,9 +104,7 @@ BEGIN
                 PIXEL_OUT       <= (OTHERS => '0');
             ELSE
 
-                ----------------------------------------------------------------
                 -- Stage 1: 147 Parallel Multipliers (49 R, 49 G, 49 B)
-                ----------------------------------------------------------------
                 IF ENABLE_ALU = '1' AND WINDOW_VALID = '1' THEN
                     FOR k IN 0 TO 48 LOOP
                         px_s_r := SIGNED(resize(WINDOW_R(k), 16));
@@ -114,9 +121,7 @@ BEGIN
                     valid_stage1 <= '0';
                 END IF;
 
-                ----------------------------------------------------------------
                 -- Stage 2: Adder Tree Level 1 (Pairwise reduction: 49 -> 25)
-                ----------------------------------------------------------------
                 IF valid_stage1 = '1' THEN
                     FOR i IN 0 TO 23 LOOP
                         sum_l1_r(i) <= resize(prod_r(2 * i), 34) + resize(prod_r(2 * i + 1), 34);
@@ -133,9 +138,7 @@ BEGIN
                     valid_stage2 <= '0';
                 END IF;
 
-                ----------------------------------------------------------------
                 -- Stage 3: Adder Tree Level 2 (Pairwise reduction: 25 -> 13)
-                ----------------------------------------------------------------
                 IF valid_stage2 = '1' THEN
                     FOR i IN 0 TO 11 LOOP
                         sum_l2_r(i) <= resize(sum_l1_r(2 * i), 35) + resize(sum_l1_r(2 * i + 1), 35);
@@ -152,9 +155,7 @@ BEGIN
                     valid_stage3 <= '0';
                 END IF;
 
-                ----------------------------------------------------------------
                 -- Stage 4: Adder Tree Level 3 (Reduction: 13 -> 1 Total Sum)
-                ----------------------------------------------------------------
                 IF valid_stage3 = '1' THEN
                     total_sum_r <= resize(sum_l2_r(0), 36)  + resize(sum_l2_r(1), 36)  +
                                    resize(sum_l2_r(2), 36)  + resize(sum_l2_r(3), 36)  +
@@ -186,9 +187,7 @@ BEGIN
                     valid_stage4 <= '0';
                 END IF;
 
-                ----------------------------------------------------------------
                 -- Stage 5: Normalization (Divisor) and Clamping to [0, 255]
-                ----------------------------------------------------------------
                 IF valid_stage4 = '1' THEN
                     IF div_stage4 = 1 THEN
                         scaled_r := total_sum_r;
@@ -212,6 +211,6 @@ BEGIN
 
             END IF;
         END IF;
-    END PROCESS;
+    END PROCESS alu_pipeline_proc;
 
 END ARCHITECTURE RTL;
