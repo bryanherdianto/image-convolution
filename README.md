@@ -1,92 +1,145 @@
-# Image Convolution in VHDL
+# Real-Time Image Convolution Hardware Accelerator in VHDL
 
-This project aims to design and implement an Image Convolution system in VHDL, providing a flexible and modular architecture for performing convolution operations on image data. Image convolution is a fundamental operation in image processing and computer vision, used extensively in tasks like feature extraction and filtering. By leveraging distinct algorithms for different processing units, this implementation explores a novel approach to enhancing convolution efficiency and modularity.  
+This repository contains a **synthesizable, high-throughput, dynamically reconfigurable hardware accelerator** for 2D image convolution implemented in VHDL.
 
----
-
-### Components 
-
-1. **Instruction Decoder**  
-   The decoder is responsible for interpreting instructions and decoding them into opcodes that determine the kernel to use for the convolution process. It also generates an `address_flag` signal to direct the input data to the appropriate computation unit, either the ALU or MMU. This synchronous design ensures proper synchronization with the system clock, allowing the decoder to efficiently coordinate between the components.
-
-2. **Arithmetic Logic Unit (ALU)**  
-   The ALU performs convolution using the *direct convolution* method. This approach processes each kernel and pixel operation sequentially, ensuring high precision and straightforward computation. The ALU is designed to handle smaller kernel sizes efficiently, making it suitable for scenarios requiring precise and localized operations.
-
-3. **Matrix Multiplier Unit (MMU)**  
-   The MMU employs the *im2col convolution* method, which transforms image data into matrix form, enabling more efficient matrix multiplication for larger kernels. This technique is optimized for scenarios where throughput and scalability are critical. The MMU's design focuses on optimizing matrix operations for speed and resource utilization.
-
-4. **Central Processing Unit (CPU)**  
-   The CPU, the top-level design, integrates all components, including the decoder, ALU, and MMU, into a cohesive system. The decoder's control signals guide data routing and kernel selection, while the ALU and MMU handle the core convolution operations. This architecture ensures modularity and scalability, allowing easy integration into broader VHDL-based systems.
+Unlike high-level behavioral simulation models that rely on host file I/O and dynamic pointers, this architecture is **100% synthesizable RTL**, delivering **real hardware acceleration** with a sustained throughput of **1 output pixel per clock cycle** across dynamic $1 \times 1$, $3 \times 3$, $5 \times 5$, and $7 \times 7$ kernel sizes.
 
 ---
 
-### Instruction Mapping
+## Hardware Architecture
 
-| Instruction | Description |
-| --- | --- |
-| 0000 | box blur kernel with ALU |
-| 0001 | horizontal edge detection kernel with ALU |
-| 0010 | vertical edge detection kernel with ALU |
-| 0011 | laplacian kernel with ALU |
-| 0100 | sharpening kernel with ALU |
-| 0101 | sobel horizontal kernel with ALU |
-| 0110 | sobel vertical kernel with ALU |
-| 0111 | custom kernel with ALU |
-| 1000 | box blur kernel with MMU |
-| 1001 | horizontal edge detection kernel with MMU |
-| 1010 | vertical edge detection kernel with MMU |
-| 1011 | laplacian kernel with MMU |
-| 1100 | sharpening kernel with MMU |
-| 1101 | sobel horizontal kernel with MMU |
-| 1110 | sobel vertical kernel with MMU |
-| 1111 | custom kernel with MMU |
+```
+                       +---------------------------------------+
+                       |    INSTRUCTION (6-bit Dynamic Opcode) |
+                       |  [5:4] Radius | [3] Unit | [2:0] Code |
+                       +-------------------+-------------------+
+                                           |
+                                           v
+                               +-----------------------+
+                               |    DECODER (Comb.)    |
+                               +---+-------+-------+---+
+                Kernel Weights (49)|       |       | Unit Select
+                                   |       |       v
+                                   |       |   +--------------+
+                                   |       |   | Control FSM  |
+                                   |       |   +--------------+
+                                   |       | Radius R (0..3)
+                                   v       v
++---------------+      +---------------------------------------+
+|  PIXEL_IN     | ---> |          LINE_BUFFER (BRAM)           | ---> 7x7 Window Registers (R, G, B)
+| (Stream 24b)  |      |   6-Row Cascaded Shift RAM (M10K)     |      + Dynamic Border Zero-Padding
++---------------+      +---------------------------------------+
+                                           |
+                        +------------------+------------------+
+                        |                                     |
+                        v                                     v
+             +--------------------+                +--------------------+
+             |    ALU Engine      |                |    MMU Engine      |
+             | Direct Spatial     |                | Systolic PE Array  |
+             | 147 Parallel Multi-|                | Vector Matrix Dot- |
+             | pliers + Adder Tree|                | Product Engine     |
+             +----------+---------+                +----------+---------+
+                        |                                     |
+                        +------------------+------------------+
+                                           |
+                                           v
+                                  +-----------------+
+                                  |   Mux & Clamp   |
+                                  +--------+--------+
+                                           |
+                                           v
+                                  +-----------------+
+                                  |    PIXEL_OUT    | (1 pixel / cycle)
+                                  +-----------------+
+```
+
+### Components
+
+1. **[conv_pkg.vhd](file:///c:/Users/victo/Documents/image-convolution/src/conv_pkg.vhd)**  
+   Core package defining hardware types: 24-bit RGB pixel records, 49-element ($7 \times 7$) window channel arrays, 16-bit signed fixed-point kernel weights, and conversion utilities.
+
+2. **[decoder.vhd](file:///c:/Users/victo/Documents/image-convolution/src/decoder.vhd)**  
+   Dynamic 6-bit combinational instruction decoder that translates opcode bits into kernel weights, divisor factors, border padding radius, and unit selection signals without introducing clock delay races. Automatically zero-masks inactive weights outside the active kernel radius.
+
+3. **[line_buffer.vhd](file:///c:/Users/victo/Documents/image-convolution/src/line_buffer.vhd)**  
+   Synthesizable 6-Line Buffer implemented via on-chip Block RAM (BRAM / M10K) and a $7 \times 7$ shift register array. Maintains a uniform center pixel latency ($3 \times \text{IMG\_WIDTH} + 3$) across all kernel sizes, ensuring glitch-free video streaming when toggling modes on the fly.
+
+4. **[alu.vhd](file:///c:/Users/victo/Documents/image-convolution/src/alu.vhd) (Direct 2D Convolution Accelerator)**  
+   Spatial convolution accelerator featuring:
+   - **147 Parallel Multipliers** computing all 49 spatial coefficients for Red, Green, and Blue concurrently.
+   - **Pipelined Adder Trees** for each color channel (Stage 2: 49 $\rightarrow$ 25, Stage 3: 25 $\rightarrow$ 13, Stage 4: 13 $\rightarrow$ 1).
+   - Stage 5: Pipelined division/scaling and hardware saturation clamping to $[0, 255]$.
+   - **Throughput:** 1 RGB pixel per clock cycle (5-stage latency).
+
+5. **[mmu.vhd](file:///c:/Users/victo/Documents/image-convolution/src/mmu.vhd) (Matrix Multiplier Unit / Systolic Array)**  
+   Matrix convolution accelerator implementing `im2col` systolic matrix-vector multiplication:
+   - 4-stage systolic processing element pipeline accumulating partial dot-products across 49 vector elements.
+   - Stage 5: Pipelined normalization and clamping to $[0, 255]$.
+   - **Throughput:** 1 RGB pixel per clock cycle (5-stage latency, bit-for-bit and cycle-for-cycle match with ALU).
+
+6. **[cpu.vhd](file:///c:/Users/victo/Documents/image-convolution/src/cpu.vhd) (Top-Level Accelerator Core)**  
+   Synthesizable top-level integrating the Line Buffer, Decoder, ALU, MMU, performance cycle counter, and master control FSM.
+
+7. **[tb_image_convolution.vhd](file:///c:/Users/victo/Documents/image-convolution/sim/tb_image_convolution.vhd)**  
+   Hardware simulation testbench that streams BMP image pixels cycle-by-cycle into the hardware accelerator, collects filtered output pixels, and verifies execution metrics.
 
 ---
 
-### Implementation of Each Module
+## Dynamic Instruction Mapping (6-Bit Opcode)
 
-1. **Dataflow Style**  
-   - **Objective**: Design the Decoder and CPU.  
-   - **Explanation**: The decoder and CPU are implemented using the dataflow style, where operations execute as soon as their inputs are available. This enables continuous computation and efficient resource usage. The dataflow architecture also ensures a streamlined design for the direct convolution process.  
+### Encoding Structure:
+* **Bits [5:4] (Radius $R$)**: Directly encodes the kernel border radius $R$, where kernel dimension $K = 2R + 1$:
+  * `00` ($R = 0$) $\rightarrow$ **$1 \times 1$ Identity Passthrough**
+  * `01` ($R = 1$) $\rightarrow$ **$3 \times 3$ Kernel**
+  * `10` ($R = 2$) $\rightarrow$ **$5 \times 5$ Kernel**
+  * `11` ($R = 3$) $\rightarrow$ **$7 \times 7$ Kernel**
+* **Bit [3] (Unit Select)**:
+  * `0` $\rightarrow$ **ALU** (Direct Spatial Adder Tree)
+  * `1` $\rightarrow$ **MMU** (Systolic Matrix Multiplier Array)
+* **Bits [2:0] (Filter Opcode)**: Selects filter profile.
 
-2. **Behavioral Style**  
-   - **Objective**: Implement the ALU and MMU.  
-   - **Explanation**: The ALU dan MMU are designed using the behavioral style, focusing on describing the functionality rather than the internal structure. This approach simplifies the implementation of image convolution.  
+### Instruction Table
 
-3. **Structural Style**  
-   - **Objective**: Design the top-level integration of the system.  
-   - **Explanation**: The structural style defines the interconnections between components, such as the decoder, ALU, and MMU. This explicit definition of structure enhances modularity and maintainability, allowing for easier debugging and future modifications.  
-
-4. **Looping**  
-   - **Objective**: Implement kernel sliding and image patching using loops.  
-   - **Explanation**: Loop structures are utilized to iterate over image data for kernel application. This approach simplifies repetitive tasks, such as shifting the kernel across the image, making the code concise and readable.   
-
-5. **FSM (Finite State Machine)**  
-   - **Objective**: Implement the top-level control logic as an FSM.  
-   - **Explanation**: The FSM controls the sequence of operations, transitioning through states such as `IDLE`, `FETCH`, `DECODE`, `EXECUTE`, and `COMPLETE`. Each state corresponds to a specific stage of the convolution process, ensuring orderly and efficient execution.  
-
-6. **Microprogramming**  
-   - **Objective**: Implement a top-level control unit for flexible convolution parameterization.  
-   - **Explanation**: The central processing unit utilizes control words specifying kernel parameters and operation mode (ALU or MMU). This compact format facilitates flexible and efficient control of the convolution process.  
+| Size | Instruction (ALU) | Instruction (MMU) | Filter Name | Divisor | Description |
+| :---: | :---: | :---: | :--- | :---: | :--- |
+| **$1 \times 1$** | `000000` | `001000` | Identity / Passthrough | 1 | Bit-for-bit raw original pixel bypass with zero latency skew |
+| **$3 \times 3$** | `010000` | `011000` | Box Blur | 9 | $3 \times 3$ spatial box average ($1/9$) |
+| **$3 \times 3$** | `010001` | `011001` | Horizontal Edge | 1 | Horizontal gradient edge detector |
+| **$3 \times 3$** | `010010` | `011010` | Vertical Edge | 1 | Vertical gradient edge detector |
+| **$3 \times 3$** | `010011` | `011011` | Laplacian | 1 | Discrete 2D Laplacian operator |
+| **$3 \times 3$** | `010100` | `011100` | Sharpening | 1 | High-pass image sharpening |
+| **$3 \times 3$** | `010101` | `011101` | Sobel Horizontal | 1 | Standard $3 \times 3$ horizontal Sobel gradient |
+| **$3 \times 3$** | `010110` | `011110` | Sobel Vertical | 1 | Standard $3 \times 3$ vertical Sobel gradient |
+| **$3 \times 3$** | `010111` | `011111` | Custom Kernel | 100 | Custom user-defined filter |
+| **$5 \times 5$** | `100000` | `101000` | Box Blur 5x5 | 25 | $5 \times 5$ spatial box average ($1/25$) |
+| **$5 \times 5$** | `100001` | `101001` | Horizontal Edge 5x5 | 1 | 5-tap horizontal edge detector |
+| **$5 \times 5$** | `100010` | `101010` | Vertical Edge 5x5 | 1 | 5-tap vertical edge detector |
+| **$5 \times 5$** | `100011` | `101011` | Laplacian 5x5 | 1 | Wide-aperture $5 \times 5$ Laplacian |
+| **$5 \times 5$** | `100100` | `101100` | Sharpening 5x5 | 1 | $5 \times 5$ high-pass sharpening |
+| **$5 \times 5$** | `100101` | `101101` | Sobel Horizontal 5x5 | 1 | $5 \times 5$ horizontal Sobel gradient |
+| **$5 \times 5$** | `100110` | `101110` | Sobel Vertical 5x5 | 1 | $5 \times 5$ vertical Sobel gradient |
+| **$5 \times 5$** | `100111` | `101111` | Gaussian Blur 5x5 | 256 | Binomial Gaussian blur $[1, 4, 6, 4, 1]$ |
+| **$7 \times 7$** | `110000` | `111000` | Box Blur 7x7 | 49 | $7 \times 7$ wide spatial box average ($1/49$) |
+| **$7 \times 7$** | `110001` | `111001` | Horizontal Edge 7x7 | 1 | 7-tap horizontal edge detector |
+| **$7 \times 7$** | `110010` | `111010` | Vertical Edge 7x7 | 1 | 7-tap vertical edge detector |
+| **$7 \times 7$** | `110011` | `111011` | Laplacian 7x7 | 1 | Deep $7 \times 7$ Laplacian operator |
+| **$7 \times 7$** | `110100` | `111100` | Sharpening 7x7 | 1 | $7 \times 7$ wide-aperture sharpening |
+| **$7 \times 7$** | `110101` | `111101` | Sobel Horizontal 7x7 | 1 | $7 \times 7$ horizontal Sobel gradient |
+| **$7 \times 7$** | `110110` | `111110` | Sobel Vertical 7x7 | 1 | $7 \times 7$ vertical Sobel gradient |
+| **$7 \times 7$** | `110111` | `111111` | Custom/Gaussian 7x7 | 100 | Wide-area custom kernel |
 
 ---
 
-### Waveform Simulation
+## Verification & Automated Test Suite
 
-![Waveform Overall Simulation](./sim/waveform_overall.png)
-![Waveform ALU Simulation](./sim/waveform_alu.png)
-![Waveform MMU Simulation](./sim/waveform_mmu.png)
+To compile all synthesizable RTL files:
 
-### Results
+```powershell
+& "D:\intelFPGA_lite\20.1\modelsim_ase\win32aloem\vcom.exe" -work work src/conv_pkg.vhd src/decoder.vhd src/line_buffer.vhd src/alu.vhd src/mmu.vhd src/cpu.vhd sim/tb_image_convolution.vhd
+```
 
-| Description | Image |
-| --- | --- |
-| Original | ![Original Image](./src/input.bmp) |
-| Box Blur | ![Box Blur Image](./outputs/output_box_blur.bmp) |
-| Horizontal Edge Detection | ![Horizontal Edge Detection Image](./outputs/output_horizontal_edge.bmp) |
-| Vertical Edge Detection | ![Vertical Edge Detection Image](./outputs/output_vertical_edge.bmp) |
-| Laplacian | ![Laplacian Image](./outputs/output_laplacian.bmp) |
-| Sharpening | ![Sharpening Image](./outputs/output_sharpening.bmp) |
-| Sobel Horizontal | ![Sobel Horizontal Image](./outputs/output_sobel_horizontal.bmp) |
-| Sobel Vertical | ![Sobel Vertical Image](./outputs/output_sobel_vertical.bmp) |
-| Custom | ![Custom Image](./outputs/output_custom.bmp) |
+To run the complete automated test suite across all kernel sizes and units:
+
+```powershell
+python sim/run_all_tests.py
+```

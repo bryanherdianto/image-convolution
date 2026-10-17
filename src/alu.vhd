@@ -1,336 +1,217 @@
 LIBRARY IEEE;
 USE IEEE.STD_LOGIC_1164.ALL;
 USE IEEE.NUMERIC_STD.ALL;
-USE IEEE.STD_LOGIC_TEXTIO.ALL;
-USE STD.TEXTIO.ALL;
+USE WORK.conv_pkg.ALL;
+
+-- =============================================================================
+-- Dynamic Spatial Convolution ALU Accelerator (7x7 / 49-Parallel Multipliers)
+-- Pipelined spatial reduction tree:
+--   Stage 1: 147 Parallel Multipliers (49 R, 49 G, 49 B)
+--   Stage 2: Adder Tree Level 1 (Pairwise reduction: 49 -> 25 sums)
+--   Stage 3: Adder Tree Level 2 (Pairwise reduction: 25 -> 13 sums)
+--   Stage 4: Adder Tree Level 3 (Final reduction: 13 -> 1 total sum)
+--   Stage 5: Normalization (Divisor) and Saturation Clamping to [0, 255]
+-- Throughput: 1 RGB pixel per clock cycle
+-- Pipeline Latency: 5 clock cycles
+-- =============================================================================
 
 ENTITY ALU IS
     PORT (
-        -- Inputs
-        CLK         : IN STD_LOGIC;
-        ENABLE_ALU  : IN STD_LOGIC;
-        OPCODE      : IN STD_LOGIC_VECTOR(2 DOWNTO 0)
+        CLK             : IN  STD_LOGIC;
+        RST             : IN  STD_LOGIC;
+        ENABLE_ALU      : IN  STD_LOGIC;
+        WINDOW_R        : IN  window_channel_t;
+        WINDOW_G        : IN  window_channel_t;
+        WINDOW_B        : IN  window_channel_t;
+        WINDOW_VALID    : IN  STD_LOGIC;
+        WEIGHTS         : IN  kernel_weights_t;
+        DIVISOR         : IN  INTEGER RANGE 1 TO 256;
+        PIXEL_OUT       : OUT STD_LOGIC_VECTOR(23 DOWNTO 0);
+        PIXEL_VALID_OUT : OUT STD_LOGIC
     );
 END ENTITY ALU;
 
-ARCHITECTURE BEH OF ALU IS
+ARCHITECTURE RTL OF ALU IS
 
-    -- Make header_type to store the BMP header
-    TYPE header_type IS ARRAY (0 TO 53) OF CHARACTER;
+    -- Product types (signed 32-bit: 16-bit signed * 16-bit signed)
+    TYPE prod_array_t IS ARRAY (0 TO 48) OF SIGNED(31 DOWNTO 0);
 
-    -- Make pixel_type to store the pixel values in the image
-    TYPE pixel_type IS RECORD
-        red     : STD_LOGIC_VECTOR(7 DOWNTO 0);
-        green   : STD_LOGIC_VECTOR(7 DOWNTO 0);
-        blue    : STD_LOGIC_VECTOR(7 DOWNTO 0);
-    END RECORD;
+    -- Pipeline Stage 1: Multiplier outputs
+    SIGNAL prod_r : prod_array_t := (OTHERS => (OTHERS => '0'));
+    SIGNAL prod_g : prod_array_t := (OTHERS => (OTHERS => '0'));
+    SIGNAL prod_b : prod_array_t := (OTHERS => (OTHERS => '0'));
+    SIGNAL valid_stage1 : STD_LOGIC := '0';
+    SIGNAL div_stage1   : INTEGER RANGE 1 TO 256 := 1;
 
-    -- Make row_type to store the row of pixels in the image
-    TYPE row_type IS ARRAY (INTEGER RANGE <>) OF pixel_type;
-    TYPE row_pointer IS ACCESS row_type;
+    -- Pipeline Stage 2: Level-1 Adder sums (49 -> 25 sums)
+    TYPE sum_l1_t IS ARRAY (0 TO 24) OF SIGNED(33 DOWNTO 0);
+    SIGNAL sum_l1_r : sum_l1_t := (OTHERS => (OTHERS => '0'));
+    SIGNAL sum_l1_g : sum_l1_t := (OTHERS => (OTHERS => '0'));
+    SIGNAL sum_l1_b : sum_l1_t := (OTHERS => (OTHERS => '0'));
+    SIGNAL valid_stage2 : STD_LOGIC := '0';
+    SIGNAL div_stage2   : INTEGER RANGE 1 TO 256 := 1;
 
-    -- Make image_type to store the image as a 2D array of pixels
-    -- Later, each image_pointer will point to a row_pointer
-    TYPE image_type IS ARRAY (INTEGER RANGE <>) OF row_pointer;
-    TYPE image_pointer IS ACCESS image_type;
-    
-    -- Make real_array_2d_type to store 2D arrays of real numbers
-    TYPE REAL_ARRAY_2D_TYPE IS ARRAY (NATURAL RANGE <>, NATURAL RANGE <>) OF REAL;
+    -- Pipeline Stage 3: Level-2 Adder sums (25 -> 13 sums)
+    TYPE sum_l2_t IS ARRAY (0 TO 12) OF SIGNED(34 DOWNTO 0);
+    SIGNAL sum_l2_r : sum_l2_t := (OTHERS => (OTHERS => '0'));
+    SIGNAL sum_l2_g : sum_l2_t := (OTHERS => (OTHERS => '0'));
+    SIGNAL sum_l2_b : sum_l2_t := (OTHERS => (OTHERS => '0'));
+    SIGNAL valid_stage3 : STD_LOGIC := '0';
+    SIGNAL div_stage3   : INTEGER RANGE 1 TO 256 := 1;
 
-    -- Make a constant for the kernel size
-    CONSTANT KERNEL_SIZE : INTEGER := 3;
+    -- Pipeline Stage 4: Total Channel Sums (36-bit)
+    SIGNAL total_sum_r  : SIGNED(35 DOWNTO 0) := (OTHERS => '0');
+    SIGNAL total_sum_g  : SIGNED(35 DOWNTO 0) := (OTHERS => '0');
+    SIGNAL total_sum_b  : SIGNED(35 DOWNTO 0) := (OTHERS => '0');
+    SIGNAL valid_stage4 : STD_LOGIC := '0';
+    SIGNAL div_stage4   : INTEGER RANGE 1 TO 256 := 1;
+
+    -- Clamping function
+    FUNCTION clamp_byte(val : SIGNED) RETURN byte_t IS
+    BEGIN
+        IF val < 0 THEN
+            RETURN to_unsigned(0, 8);
+        ELSIF val > 255 THEN
+            RETURN to_unsigned(255, 8);
+        ELSE
+            RETURN resize(unsigned(val), 8);
+        END IF;
+    END FUNCTION;
 
 BEGIN
 
-    PROCESS (CLK) IS
-
-        TYPE char_file IS FILE OF CHARACTER;
-        FILE bmp_file           : char_file;
-        FILE out_file           : char_file;
-        FILE kernel_file        : TEXT; -- Open file for reading
-        VARIABLE header         : header_type;
-        VARIABLE image_width    : INTEGER;
-        VARIABLE image_height   : INTEGER;
-        VARIABLE padding        : INTEGER;
-        VARIABLE red_result     : INTEGER;
-        VARIABLE green_result   : INTEGER;
-        VARIABLE blue_result    : INTEGER;
-        VARIABLE row            : row_pointer;
-        VARIABLE temp_row       : row_pointer;
-        VARIABLE image          : image_pointer;
-        VARIABLE temp_image     : image_pointer;
-        VARIABLE char           : CHARACTER;
-        VARIABLE line_in        : LINE;
-        VARIABLE value_in       : REAL;
-        VARIABLE denominator    : REAL;
-        VARIABLE file_name      : STRING(1 TO 20);
-        VARIABLE kernel         : REAL_ARRAY_2D_TYPE(0 TO KERNEL_SIZE - 1, 0 TO KERNEL_SIZE - 1);
-
+    PROCESS (CLK)
+        VARIABLE px_s_r, px_s_g, px_s_b       : SIGNED(15 DOWNTO 0);
+        VARIABLE scaled_r, scaled_g, scaled_b : SIGNED(35 DOWNTO 0);
+        VARIABLE out_px                       : rgb_pixel_t;
     BEGIN
         IF RISING_EDGE(CLK) THEN
-            IF ENABLE_ALU = '1' THEN
-            
-                -- Select the input file name based on OPCODE
-                CASE OPCODE IS
-                    WHEN "000" =>
-                        file_name := "box_blur.txt        ";
-                    WHEN "001" =>
-                        file_name := "horizontal_edge.txt ";
-                    WHEN "010" =>
-                        file_name := "vertical_edge.txt   ";
-                    WHEN "011" =>
-                        file_name := "laplacian.txt       ";
-                    WHEN "100" =>
-                        file_name := "sharpening.txt      ";
-                    WHEN "101" =>
-                        file_name := "sobel_horizontal.txt";
-                    WHEN "110" =>
-                        file_name := "sobel_vertical.txt  ";
-                    WHEN "111" =>
-                        file_name := "custom.txt          ";
-                    WHEN OTHERS =>
-                        file_name := "custom.txt          ";
-                END CASE;
+            IF RST = '1' THEN
+                valid_stage1    <= '0';
+                valid_stage2    <= '0';
+                valid_stage3    <= '0';
+                valid_stage4    <= '0';
+                PIXEL_VALID_OUT <= '0';
+                PIXEL_OUT       <= (OTHERS => '0');
+            ELSE
 
-                -- Open the files dynamically
-                file_open(kernel_file, file_name, read_mode);
-                file_open(bmp_file, "input.bmp", read_mode);
-                file_open(out_file, "output.bmp", write_mode);
+                ----------------------------------------------------------------
+                -- Stage 1: 147 Parallel Multipliers (49 R, 49 G, 49 B)
+                ----------------------------------------------------------------
+                IF ENABLE_ALU = '1' AND WINDOW_VALID = '1' THEN
+                    FOR k IN 0 TO 48 LOOP
+                        px_s_r := SIGNED(resize(WINDOW_R(k), 16));
+                        px_s_g := SIGNED(resize(WINDOW_G(k), 16));
+                        px_s_b := SIGNED(resize(WINDOW_B(k), 16));
 
-                -- Read entire header
-                FOR i IN header_type'RANGE LOOP
-                    read(bmp_file, header(i));
-                END LOOP;
-
-                -- Check ID field
-                ASSERT header(0) = 'B' AND header(1) = 'M'
-                REPORT "First two bytes are not ""BM"". This is not a BMP file" SEVERITY failure;
-
-                -- Check that the pixel array offset is as expected
-                ASSERT CHARACTER'pos(header(10)) = 54 AND
-                       CHARACTER'pos(header(11)) = 0 AND
-                       CHARACTER'pos(header(12)) = 0 AND
-                       CHARACTER'pos(header(13)) = 0
-                REPORT "Pixel array offset in header is not 54 bytes" SEVERITY failure;
-
-                -- Check that DIB header size is 40 bytes,
-                -- meaning that the BMP is of type BITMAPINFOHEADER
-                ASSERT CHARACTER'pos(header(14)) = 40 AND
-                       CHARACTER'pos(header(15)) = 0 AND
-                       CHARACTER'pos(header(16)) = 0 AND
-                       CHARACTER'pos(header(17)) = 0
-                REPORT "DIB headers size is not 40 bytes, hence not a Windows BMP" SEVERITY failure;
-
-                -- Check that the number of color planes is 1
-                ASSERT CHARACTER'pos(header(26)) = 1 AND CHARACTER'pos(header(27)) = 0
-                REPORT "The number of color planes is not 1" SEVERITY failure;
-
-                -- Check that the number of bits per pixel is 24
-                ASSERT CHARACTER'pos(header(28)) = 24 AND CHARACTER'pos(header(29)) = 0
-                REPORT "Bits per pixel is not 24" SEVERITY failure;
-
-                -- Read image width
-                image_width := CHARACTER'pos(header(18)) +
-                               CHARACTER'pos(header(19)) * 2 ** 8 +
-                               CHARACTER'pos(header(20)) * 2 ** 16 +
-                               CHARACTER'pos(header(21)) * 2 ** 24;
-
-                -- Read image height
-                image_height := CHARACTER'pos(header(22)) +
-                                CHARACTER'pos(header(23)) * 2 ** 8 +
-                                CHARACTER'pos(header(24)) * 2 ** 16 +
-                                CHARACTER'pos(header(25)) * 2 ** 24;
-
-                -- Report the image width and height
-                REPORT "WIDTH: " & INTEGER'image(image_width) & ", HEIGHT: " & INTEGER'image(image_height);
-
-                -- Number of bytes needed to pad each row to 32 bits
-                padding := (4 - image_width * 3 MOD 4) MOD 4;
-
-                -- Read the kernel values from the file
-                FOR row_txt IN 0 TO KERNEL_SIZE - 1 LOOP
-                    readline(kernel_file, line_in); -- Read one line from the file
-
-                    FOR col_txt IN 0 TO KERNEL_SIZE - 1 LOOP
-                        read(line_in, value_in);
-
-                        IF line_in'length > 0 THEN
-                            read(line_in, char); -- Read the slash or space
-
-                            IF char = '/' THEN
-                                read(line_in, denominator); -- Read denominator
-                                value_in                    := value_in / denominator;
-                                kernel(row_txt, col_txt)    := value_in;
-                                NEXT;
-                            END IF;
-
-                        END IF;
-
-                        kernel(row_txt, col_txt) := value_in;
-
+                        prod_r(k) <= px_s_r * WEIGHTS(k);
+                        prod_g(k) <= px_s_g * WEIGHTS(k);
+                        prod_b(k) <= px_s_b * WEIGHTS(k);
                     END LOOP;
-                END LOOP;
+                    valid_stage1 <= '1';
+                    div_stage1   <= DIVISOR;
+                ELSE
+                    valid_stage1 <= '0';
+                END IF;
 
-                -- Create a new image type in dynamic memory
-                temp_image  := NEW image_type(0 TO image_height + 1);
-                image       := NEW image_type(0 TO image_height + 1);
-
-                -- Iterate to read the image and initialize the image pointers
-                FOR i IN 0 TO image_height + 1 LOOP
-
-                    -- Create a new row type in dynamic memory
-                    temp_row    := NEW row_type(0 TO image_width + 1);
-                    row         := NEW row_type(0 TO image_width + 1);
-
-                    FOR j IN 0 TO image_width + 1 LOOP
-
-                        -- Zero padding for the first and last rows and columns
-                        IF i = 0 OR i = image_height + 1 OR j = 0 OR j = image_width + 1 THEN
-                            temp_row(j).red     := (OTHERS => '0');
-                            temp_row(j).green   := (OTHERS => '0');
-                            temp_row(j).blue    := (OTHERS => '0');
-                            NEXT;
-                        END IF;
-
-                        -- Read blue pixel
-                        read(bmp_file, char);
-                        temp_row(j).blue := STD_LOGIC_VECTOR(to_unsigned(CHARACTER'pos(char), 8));
-
-                        -- Read green pixel
-                        read(bmp_file, char);
-                        temp_row(j).green := STD_LOGIC_VECTOR(to_unsigned(CHARACTER'pos(char), 8));
-
-                        -- Read red pixel
-                        read(bmp_file, char);
-                        temp_row(j).red := STD_LOGIC_VECTOR(to_unsigned(CHARACTER'pos(char), 8));
-
+                ----------------------------------------------------------------
+                -- Stage 2: Adder Tree Level 1 (Pairwise reduction: 49 -> 25)
+                ----------------------------------------------------------------
+                IF valid_stage1 = '1' THEN
+                    FOR i IN 0 TO 23 LOOP
+                        sum_l1_r(i) <= resize(prod_r(2 * i), 34) + resize(prod_r(2 * i + 1), 34);
+                        sum_l1_g(i) <= resize(prod_g(2 * i), 34) + resize(prod_g(2 * i + 1), 34);
+                        sum_l1_b(i) <= resize(prod_b(2 * i), 34) + resize(prod_b(2 * i + 1), 34);
                     END LOOP;
+                    sum_l1_r(24) <= resize(prod_r(48), 34);
+                    sum_l1_g(24) <= resize(prod_g(48), 34);
+                    sum_l1_b(24) <= resize(prod_b(48), 34);
 
-                    -- Read and discard padding
-                    FOR i IN 1 TO padding LOOP
-                        IF i = 0 OR i = image_height + 1 THEN
-                            NEXT;
-                        END IF;
-                        read(bmp_file, char);
+                    valid_stage2 <= '1';
+                    div_stage2   <= div_stage1;
+                ELSE
+                    valid_stage2 <= '0';
+                END IF;
+
+                ----------------------------------------------------------------
+                -- Stage 3: Adder Tree Level 2 (Pairwise reduction: 25 -> 13)
+                ----------------------------------------------------------------
+                IF valid_stage2 = '1' THEN
+                    FOR i IN 0 TO 11 LOOP
+                        sum_l2_r(i) <= resize(sum_l1_r(2 * i), 35) + resize(sum_l1_r(2 * i + 1), 35);
+                        sum_l2_g(i) <= resize(sum_l1_g(2 * i), 35) + resize(sum_l1_g(2 * i + 1), 35);
+                        sum_l2_b(i) <= resize(sum_l1_b(2 * i), 35) + resize(sum_l1_b(2 * i + 1), 35);
                     END LOOP;
+                    sum_l2_r(12) <= resize(sum_l1_r(24), 35);
+                    sum_l2_g(12) <= resize(sum_l1_g(24), 35);
+                    sum_l2_b(12) <= resize(sum_l1_b(24), 35);
 
-                    -- Assign the row pointer to the image vector of rows
-                    temp_image(i)   := temp_row;
-                    image(i)        := row;
+                    valid_stage3 <= '1';
+                    div_stage3   <= div_stage2;
+                ELSE
+                    valid_stage3 <= '0';
+                END IF;
 
-                END LOOP;
+                ----------------------------------------------------------------
+                -- Stage 4: Adder Tree Level 3 (Reduction: 13 -> 1 Total Sum)
+                ----------------------------------------------------------------
+                IF valid_stage3 = '1' THEN
+                    total_sum_r <= resize(sum_l2_r(0), 36)  + resize(sum_l2_r(1), 36)  +
+                                   resize(sum_l2_r(2), 36)  + resize(sum_l2_r(3), 36)  +
+                                   resize(sum_l2_r(4), 36)  + resize(sum_l2_r(5), 36)  +
+                                   resize(sum_l2_r(6), 36)  + resize(sum_l2_r(7), 36)  +
+                                   resize(sum_l2_r(8), 36)  + resize(sum_l2_r(9), 36)  +
+                                   resize(sum_l2_r(10), 36) + resize(sum_l2_r(11), 36) +
+                                   resize(sum_l2_r(12), 36);
 
-                FOR i IN 1 TO image_height LOOP
-                    row := image(i);
+                    total_sum_g <= resize(sum_l2_g(0), 36)  + resize(sum_l2_g(1), 36)  +
+                                   resize(sum_l2_g(2), 36)  + resize(sum_l2_g(3), 36)  +
+                                   resize(sum_l2_g(4), 36)  + resize(sum_l2_g(5), 36)  +
+                                   resize(sum_l2_g(6), 36)  + resize(sum_l2_g(7), 36)  +
+                                   resize(sum_l2_g(8), 36)  + resize(sum_l2_g(9), 36)  +
+                                   resize(sum_l2_g(10), 36) + resize(sum_l2_g(11), 36) +
+                                   resize(sum_l2_g(12), 36);
 
-                    FOR j IN 1 TO image_width LOOP
-                        -- Compute the red channel with clamping
-                        red_result := INTEGER(
-                            kernel(0, 0) * REAL(to_integer(unsigned(temp_image(i - 1)(j - 1).red))) +
-                            kernel(0, 1) * REAL(to_integer(unsigned(temp_image(i - 1)(j).red))) +
-                            kernel(0, 2) * REAL(to_integer(unsigned(temp_image(i - 1)(j + 1).red))) +
-                            kernel(1, 0) * REAL(to_integer(unsigned(temp_image(i)(j - 1).red))) +
-                            kernel(1, 1) * REAL(to_integer(unsigned(temp_image(i)(j).red))) +
-                            kernel(1, 2) * REAL(to_integer(unsigned(temp_image(i)(j + 1).red))) +
-                            kernel(2, 0) * REAL(to_integer(unsigned(temp_image(i + 1)(j - 1).red))) +
-                            kernel(2, 1) * REAL(to_integer(unsigned(temp_image(i + 1)(j).red))) +
-                            kernel(2, 2) * REAL(to_integer(unsigned(temp_image(i + 1)(j + 1).red)))
-                        );
+                    total_sum_b <= resize(sum_l2_b(0), 36)  + resize(sum_l2_b(1), 36)  +
+                                   resize(sum_l2_b(2), 36)  + resize(sum_l2_b(3), 36)  +
+                                   resize(sum_l2_b(4), 36)  + resize(sum_l2_b(5), 36)  +
+                                   resize(sum_l2_b(6), 36)  + resize(sum_l2_b(7), 36)  +
+                                   resize(sum_l2_b(8), 36)  + resize(sum_l2_b(9), 36)  +
+                                   resize(sum_l2_b(10), 36) + resize(sum_l2_b(11), 36) +
+                                   resize(sum_l2_b(12), 36);
 
-                        IF red_result > 255 THEN
-                            red_result := 255; -- Clamp to 255
-                        ELSIF red_result < 0 THEN
-                            red_result := 0; -- Clamp to 0 (in case of underflow)
-                        END IF;
+                    valid_stage4 <= '1';
+                    div_stage4   <= div_stage3;
+                ELSE
+                    valid_stage4 <= '0';
+                END IF;
 
-                        row(j).red := STD_LOGIC_VECTOR(to_unsigned(red_result, 8));
+                ----------------------------------------------------------------
+                -- Stage 5: Normalization (Divisor) and Clamping to [0, 255]
+                ----------------------------------------------------------------
+                IF valid_stage4 = '1' THEN
+                    IF div_stage4 = 1 THEN
+                        scaled_r := total_sum_r;
+                        scaled_g := total_sum_g;
+                        scaled_b := total_sum_b;
+                    ELSE
+                        scaled_r := total_sum_r / div_stage4;
+                        scaled_g := total_sum_g / div_stage4;
+                        scaled_b := total_sum_b / div_stage4;
+                    END IF;
 
-                        -- Compute the green channel with clamping
-                        green_result := INTEGER(
-                            kernel(0, 0) * REAL(to_integer(unsigned(temp_image(i - 1)(j - 1).green))) +
-                            kernel(0, 1) * REAL(to_integer(unsigned(temp_image(i - 1)(j).green))) +
-                            kernel(0, 2) * REAL(to_integer(unsigned(temp_image(i - 1)(j + 1).green))) +
-                            kernel(1, 0) * REAL(to_integer(unsigned(temp_image(i)(j - 1).green))) +
-                            kernel(1, 1) * REAL(to_integer(unsigned(temp_image(i)(j).green))) +
-                            kernel(1, 2) * REAL(to_integer(unsigned(temp_image(i)(j + 1).green))) +
-                            kernel(2, 0) * REAL(to_integer(unsigned(temp_image(i + 1)(j - 1).green))) +
-                            kernel(2, 1) * REAL(to_integer(unsigned(temp_image(i + 1)(j).green))) +
-                            kernel(2, 2) * REAL(to_integer(unsigned(temp_image(i + 1)(j + 1).green)))
-                        );
+                    out_px.r := clamp_byte(scaled_r);
+                    out_px.g := clamp_byte(scaled_g);
+                    out_px.b := clamp_byte(scaled_b);
 
-                        IF green_result > 255 THEN
-                            green_result := 255; -- Clamp to 255
-                        ELSIF green_result < 0 THEN
-                            green_result := 0; -- Clamp to 0
-                        END IF;
-
-                        row(j).green := STD_LOGIC_VECTOR(to_unsigned(green_result, 8));
-
-                        -- Compute the blue channel with clamping
-                        blue_result := INTEGER(
-                            kernel(0, 0) * REAL(to_integer(unsigned(temp_image(i - 1)(j - 1).blue))) +
-                            kernel(0, 1) * REAL(to_integer(unsigned(temp_image(i - 1)(j).blue))) +
-                            kernel(0, 2) * REAL(to_integer(unsigned(temp_image(i - 1)(j + 1).blue))) +
-                            kernel(1, 0) * REAL(to_integer(unsigned(temp_image(i)(j - 1).blue))) +
-                            kernel(1, 1) * REAL(to_integer(unsigned(temp_image(i)(j).blue))) +
-                            kernel(1, 2) * REAL(to_integer(unsigned(temp_image(i)(j + 1).blue))) +
-                            kernel(2, 0) * REAL(to_integer(unsigned(temp_image(i + 1)(j - 1).blue))) +
-                            kernel(2, 1) * REAL(to_integer(unsigned(temp_image(i + 1)(j).blue))) +
-                            kernel(2, 2) * REAL(to_integer(unsigned(temp_image(i + 1)(j + 1).blue)))
-                        );
-
-                        IF blue_result > 255 THEN
-                            blue_result := 255; -- Clamp to 255
-                        ELSIF blue_result < 0 THEN
-                            blue_result := 0; -- Clamp to 0
-                        END IF;
-
-                        row(j).blue := STD_LOGIC_VECTOR(to_unsigned(blue_result, 8));
-                    END LOOP;
-                END LOOP;
-
-                -- Write header to output file
-                FOR i IN header_type'RANGE LOOP
-                    write(out_file, header(i));
-                END LOOP;
-
-                FOR i IN 1 TO image_height LOOP
-                    row := image(i);
-
-                    FOR j IN 1 TO image_width LOOP
-
-                        -- Write blue pixel
-                        write(out_file, CHARACTER'val(to_integer(unsigned(row(j).blue))));
-
-                        -- Write green pixel
-                        write(out_file, CHARACTER'val(to_integer(unsigned(row(j).green))));
-
-                        -- Write red pixel
-                        write(out_file, CHARACTER'val(to_integer(unsigned(row(j).red))));
-
-                    END LOOP;
-
-                    -- Deallocate the row
-                    deallocate(row);
-                    deallocate(temp_row);
-
-                    -- Write padding
-                    FOR i IN 1 TO padding LOOP
-                        write(out_file, CHARACTER'val(0));
-                    END LOOP;
-
-                END LOOP;
-
-                -- Deallocate the image
-                deallocate(image);
-                deallocate(temp_image);
-
-                -- Close the files
-                file_close(bmp_file);
-                file_close(out_file);
-                file_close(kernel_file);
+                    PIXEL_OUT       <= rgb_to_slv(out_px);
+                    PIXEL_VALID_OUT <= '1';
+                ELSE
+                    PIXEL_VALID_OUT <= '0';
+                END IF;
 
             END IF;
         END IF;
     END PROCESS;
-END ARCHITECTURE BEH;
+
+END ARCHITECTURE RTL;
