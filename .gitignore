@@ -1,5 +1,54 @@
+# ModelSim / QuestaSim Simulation Artifacts
 project.mpf
 project.cr.mti
 work/
 transcript
 vsim.wlf
+*.wlf
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Compilation databases and output directories
+db/
+incremental_db/
+output_files/
+simulation/
+greybox_tmp/
+hc_output/
+hps_isw_handoff/
+
+# User GUI workspace and session state
+*.qws
+*.qdf
+*.sld
+*.smsg
+
+# Quartus reports and build logs
+*.rpt
+*.summary
+*.done
+*.chg
+*.pin
+*.jdi
+*.flow.rpt
+*.map.*
+*.fit.*
+*.sta.*
+*.asm.*
+*.eda.*
+
+# Bitstreams and programming files (keep if explicitly needed, but standard to ignore)
+*.sof
+*.pof
+*.rbf
+*.jam
+*.jbc
+
+# OS & Editor Artifacts
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.bak

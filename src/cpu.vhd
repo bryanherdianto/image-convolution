@@ -15,8 +15,8 @@ USE WORK.conv_pkg.ALL;
 
 ENTITY CPU IS
     GENERIC (
-        IMG_WIDTH  : INTEGER := 1000;
-        IMG_HEIGHT : INTEGER := 1000
+        IMG_WIDTH  : INTEGER := 100;
+        IMG_HEIGHT : INTEGER := 100
     );
     PORT (
         CLK             : IN  STD_LOGIC;
