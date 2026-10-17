@@ -1,13 +1,12 @@
+# Entity: ALU
 
-# Entity: ALU 
-- **File**: alu.vhd
-- **Brief:**  Dynamic Spatial Convolution ALU Accelerator
-- **Details:**  49-multiplier pipelined spatial reduction tree executing parallel 2D convolution across RGB color planes.
+- **File:** alu.vhd
+- **Brief:** Dynamic Spatial Convolution ALU Accelerator
+- **Details:** 49-multiplier pipelined spatial reduction tree executing parallel 2D convolution across RGB color planes.
 
 ## Diagram
-![Diagram](ALU.svg "Diagram")
-## Description
 
+![Diagram](ALU.svg "Diagram")
 
 ## Ports
 
@@ -52,16 +51,19 @@
 
 ## Types
 
-| Name         | Type | Description                                               |
-| ------------ | ---- | --------------------------------------------------------- |
-| prod_array_t |      | Product array type holding 49 signed 32-bit products      |
-| sum_l1_t     |      | Level-1 pairwise reduction sum array type (49 to 25 sums) |
-| sum_l2_t     |      | Level-2 pairwise reduction sum array type (25 to 13 sums) |
+| Name         | Description                                               |
+| ------------ | --------------------------------------------------------- |
+| prod_array_t | Product array type holding 49 signed 32-bit products      |
+| sum_l1_t     | Level-1 pairwise reduction sum array type (49 to 25 sums) |
+| sum_l2_t     | Level-2 pairwise reduction sum array type (25 to 13 sums) |
 
 ## Functions
-- clamp_byte <font id="function_arguments">(val : SIGNED)</font> <font id="function_return">RETURN byte_t</font>
-  -  Clamps signed 36-bit accumulator value to 8-bit range [0, 255]
+
+- clamp_byte
+  - Clamps signed 36-bit accumulator value (val) to 8-bit range [0, 255] (byte_t)
+
 ## Processes
-- alu_pipeline_proc: ( CLK )
-  - **Description**
-  5-stage pipelined spatial convolution reduction and saturation clamping process
+
+- alu_pipeline_proc
+  - The sensitivity list of the process is CLK
+  - The process is a 5-stage pipelined spatial convolution reduction and saturation clamping process

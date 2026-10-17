@@ -1,13 +1,12 @@
+# Entity: MMU
 
-# Entity: MMU 
-- **File**: mmu.vhd
-- **Brief:**  Dynamic Systolic Matrix Multiplier Unit (MMU) Hardware Accelerator
-- **Details:**  Implements 49-element im2col systolic matrix-vector multiplication across RGB channels with 5-stage pipelined accumulation matching ALU latency and throughput.
+- **File:** mmu.vhd
+- **Brief:** Dynamic Systolic Matrix Multiplier Unit (MMU) Hardware Accelerator
+- **Details:** Implements 49-element im2col systolic matrix-vector multiplication across RGB channels with 5-stage pipelined accumulation matching ALU latency and throughput.
 
 ## Diagram
-![Diagram](MMU.svg "Diagram")
-## Description
 
+![Diagram](MMU.svg "Diagram")
 
 ## Ports
 
@@ -61,16 +60,21 @@
 
 ## Types
 
-| Name      | Type | Description                                                |
-| --------- | ---- | ---------------------------------------------------------- |
-| vec_st2_t |      | Vector forwarding array type for Stage 2 (elements 12..48) |
-| vec_st3_t |      | Vector forwarding array type for Stage 3 (elements 24..48) |
-| vec_st4_t |      | Vector forwarding array type for Stage 4 (elements 36..48) |
+| Name      | Description                                                |
+| --------- | ---------------------------------------------------------- |
+| vec_st2_t | Vector forwarding array type for Stage 2 (elements 12..48) |
+| vec_st3_t | Vector forwarding array type for Stage 3 (elements 24..48) |
+| vec_st4_t | Vector forwarding array type for Stage 4 (elements 36..48) |
 
 ## Functions
-- clamp_byte <font id="function_arguments">(val : SIGNED)</font> <font id="function_return">RETURN byte_t</font>
-  -  Clamps signed 36-bit accumulator value to 8-bit range [0, 255]
+
+- clamp_byte
+  - Accepts a signed 36-bit integer value (val)
+  - Returns an 8-bit unsigned integer (byte_t)
+  - Clamps signed 36-bit accumulator value to 8-bit range [0, 255]
+
 ## Processes
-- mmu_systolic_proc: ( CLK )
-  - **Description**
-  5-stage systolic matrix multiplier accumulation and saturation clamping process
+
+- mmu_systolic_proc
+  - This process has a sensitivity list of CLK
+  - This process implements a 5-stage systolic matrix-vector multiplication across RGB channels, with pipelined accumulation and divisor propagation, producing a convolved RGB output pixel and valid strobe

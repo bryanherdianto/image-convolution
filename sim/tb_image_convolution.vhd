@@ -10,7 +10,7 @@ ENTITY tb_image_convolution IS
         G_IMG_HEIGHT   : INTEGER := 100;
         G_IN_FILE      : STRING  := "src/input.bmp";
         G_OUT_FILE     : STRING  := "sim/output_sim.bmp";
-        G_INSTRUCTION  : STD_LOGIC_VECTOR(5 DOWNTO 0) := "010000" -- Default: 3x3 Box Blur ALU
+        G_INSTRUCTION  : STD_LOGIC_VECTOR(5 DOWNTO 0) := "010000" -- Default is 3x3 Box Blur ALU
     );
 END ENTITY tb_image_convolution;
 
@@ -75,7 +75,6 @@ BEGIN
             CYCLE_COUNT     => cycle_count
         );
 
-    -- Stimulus Driver (Feeds BMP pixels cycle-by-cycle into hardware)
     driver_process : PROCESS
         VARIABLE ch_b, ch_g, ch_r : CHARACTER;
         VARIABLE dummy_ch         : CHARACTER;
@@ -110,7 +109,7 @@ BEGIN
         WAIT UNTIL RISING_EDGE(clk);
         WAIT UNTIL RISING_EDGE(clk);
 
-        REPORT "Starting streaming input pixels into hardware accelerator...";
+        REPORT "Streaming input pixels into hardware accelerator...";
 
         -- Stream pixels row by row, 1 pixel per clock cycle!
         FOR r IN 0 TO G_IMG_HEIGHT - 1 LOOP
@@ -190,13 +189,9 @@ BEGIN
 
         file_close(out_bmp_file);
 
-        REPORT "==========================================================";
-        REPORT "HARDWARE ACCELERATION SIMULATION COMPLETED SUCCESSFULLY";
-        REPORT "Total Output Pixels Collected : " & INTEGER'image(px_count);
+        REPORT "Hardware pipeline completed. Here are the results...";
+        REPORT "Total Output Pixels Collected: " & INTEGER'image(px_count);
         REPORT "Total Hardware Execution Cycles: " & INTEGER'image(to_integer(cycle_count));
-        REPORT "Peak Throughput               : 1 pixel / clock cycle";
-        REPORT "Operating Frequency           : 100.0 MHz";
-        REPORT "==========================================================";
 
         WAIT;
     END PROCESS;

@@ -1,13 +1,12 @@
+# Entity: CPU
 
-# Entity: CPU 
-- **File**: cpu.vhd
-- **Brief:**  Top-Level Synthesizable Image Convolution Hardware Accelerator (CPU)
-- **Details:**  Top-level processor integrating the 6-bit instruction decoder, 6-line BRAM buffer with 7x7 window generator, 49-multiplier direct spatial ALU, 49-PE systolic MMU, and master execution FSM with hardware cycle counter.
+- **File:** cpu.vhd
+- **Brief:** Top-Level Synthesizable Image Convolution Hardware Accelerator (CPU)
+- **Details:** Top-level processor integrating the 6-bit instruction decoder, 6-line BRAM buffer with 7x7 window generator, 49-multiplier direct spatial ALU, 49-PE systolic MMU, and master execution FSM with hardware cycle counter.
 
 ## Diagram
-![Diagram](CPU.svg "Diagram")
-## Description
 
+![Diagram](CPU.svg "Diagram")
 
 ## Generics
 
@@ -59,27 +58,27 @@
 
 ## Constants
 
-| Name         | Type    | Value                  | Description                       |
-| ------------ | ------- | ---------------------- | --------------------------------- |
-| TOTAL_PIXELS | INTEGER | IMG_WIDTH * IMG_HEIGHT | Total pixel count per image frame |
+| Name         | Type    | Value                   | Description                       |
+| ------------ | ------- | ----------------------- | --------------------------------- |
+| TOTAL_PIXELS | INTEGER | IMG_WIDTH \* IMG_HEIGHT | Total pixel count per image frame |
 
 ## Enums
 
+### _state_t_
 
-### *state_t*
- Top-level controller finite state machine states
+Top-level controller finite state machine states
 
-| Name        | Description |
-| ----------- | ----------- |
-| ST_IDLE     |             |
-| ST_RUN      |             |
-| ST_COMPLETE |             |
-
+| Name        | Description    |
+| ----------- | -------------- |
+| ST_IDLE     | Idle state     |
+| ST_RUN      | Running state  |
+| ST_COMPLETE | Complete state |
 
 ## Processes
-- fsm_cycle_proc: ( CLK )
-  - **Description**
-  Master control FSM and performance cycle counter process
+
+- fsm_cycle_proc
+  - This process has a sensitivity list of CLK
+  - This process implements the top-level master control finite state machine and performance cycle counter
 
 ## Instantiations
 
@@ -90,5 +89,4 @@
 
 ## State machines
 
-- Master control FSM and performance cycle counter process
-![Diagram_state_machine_0]( fsm_CPU_00.svg "Diagram")
+![Diagram_state_machine_0](fsm_CPU_00.svg "Diagram")

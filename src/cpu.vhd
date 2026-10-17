@@ -211,7 +211,6 @@ BEGIN
     PIXEL_VALID_OUT <= mmu_valid_out WHEN unit_select = '1' ELSE alu_valid_out;
     CYCLE_COUNT     <= cycle_cnt;
 
-    -- Control FSM & Performance Cycle Counter
     --! Master control FSM and performance cycle counter process
     fsm_cycle_proc : PROCESS (CLK)
         VARIABLE cur_valid_out : STD_LOGIC;

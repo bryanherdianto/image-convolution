@@ -1,13 +1,12 @@
+# Entity: LINE_BUFFER
 
-# Entity: LINE_BUFFER 
-- **File**: line_buffer.vhd
-- **Brief:**  Dynamic Multi-Scale Line Buffer & Window Generator
-- **Details:**  Manages 6 on-chip Block RAM circular line buffers and a 7x7 sliding window register array with boundary zero-padding for radius R=0..3.
+- **File:** line_buffer.vhd
+- **Brief:** Dynamic Multi-Scale Line Buffer & Window Generator
+- **Details:** Manages 6 on-chip Block RAM circular line buffers and a 7x7 sliding window register array with boundary zero-padding for radius R=0..3.
 
 ## Diagram
-![Diagram](LINE_BUFFER.svg "Diagram")
-## Description
 
+![Diagram](LINE_BUFFER.svg "Diagram")
 
 ## Generics
 
@@ -53,38 +52,40 @@
 
 ## Constants
 
-| Name           | Type    | Value                  | Description                                                |
-| -------------- | ------- | ---------------------- | ---------------------------------------------------------- |
-| TOTAL_PIXELS   | INTEGER | IMG_WIDTH * IMG_HEIGHT | Total pixel count per image frame                          |
-| CENTER_LATENCY | INTEGER | 3 * IMG_WIDTH + 4      | Latency cycles until center pixel is aligned in 7x7 window |
-| FLUSH_CYCLES   | INTEGER | 3 * IMG_WIDTH + 6      | Post-frame pipeline flush cycles                           |
+| Name           | Type    | Value                   | Description                                                |
+| -------------- | ------- | ----------------------- | ---------------------------------------------------------- |
+| TOTAL_PIXELS   | INTEGER | IMG_WIDTH \* IMG_HEIGHT | Total pixel count per image frame                          |
+| CENTER_LATENCY | INTEGER | 3 \* IMG_WIDTH + 4      | Latency cycles until center pixel is aligned in 7x7 window |
+| FLUSH_CYCLES   | INTEGER | 3 \* IMG_WIDTH + 6      | Post-frame pipeline flush cycles                           |
 
 ## Types
 
-| Name       | Type | Description                                                        |
-| ---------- | ---- | ------------------------------------------------------------------ |
-| line_ram_t |      | Single-line BRAM circular memory buffer type holding one image row |
-| win_reg_t  |      | 7x7 spatial 2D sliding window shift register matrix                |
+| Name       | Description                                                        |
+| ---------- | ------------------------------------------------------------------ |
+| line_ram_t | Single-line BRAM circular memory buffer type holding one image row |
+| win_reg_t  | 7x7 spatial 2D sliding window shift register matrix                |
 
 ## Enums
 
+### _state_t_
 
-### *state_t*
- Line buffer controller finite state machine states
+Line buffer controller finite state machine states
 
-| Name      | Description |
-| --------- | ----------- |
-| ST_IDLE   |             |
-| ST_STREAM |             |
-| ST_FLUSH  |             |
-| ST_DONE   |             |
-
+| Name      | Description                               |
+| --------- | ----------------------------------------- |
+| ST_IDLE   | Line buffer is idle and waiting for input |
+| ST_STREAM | Line buffer is streaming input data       |
+| ST_FLUSH  | Line buffer is flushing remaining data    |
+| ST_DONE   | Line buffer has completed its operation   |
 
 ## Processes
-- line_buffer_fsm_proc: ( CLK )
-  - **Description**
-  Multi-scale line buffer streaming, window shifting, and zero-padding process
+
+- line_buffer_fsm_proc
+  - This process has a sensitivity list of CLK
+  - This process implements the line buffer controller finite state machine, managing the streaming of input pixels, the shifting of the 7x7 sliding window, and the flushing of remaining pipeline data after the end of the image frame
+
+> For smaller kernels, the sliding window will contain zero-padded pixels at the borders, ensuring that the convolution operation can be applied consistently across the entire image, including the edges. Flushing is done by pumping additional zero-valued pixels into the line buffer after the last valid input pixel has been received, allowing the pipeline to complete processing of all valid pixels in the frame.
 
 ## State machines
 
-![Diagram_state_machine_0]( fsm_LINE_BUFFER_00.svg "Diagram")
+![Diagram_state_machine_0](fsm_LINE_BUFFER_00.svg "Diagram")

@@ -1,13 +1,12 @@
+# Entity: DECODER
 
-# Entity: DECODER 
-- **File**: decoder.vhd
-- **Brief:**  Dynamic Combinational Instruction Decoder
-- **Details:**  Decodes a 6-bit instruction into kernel radius (bits 5:4), accelerator unit select (bit 3), and filter opcode (bits 2:0), generating 49 spatial filter weights and divisor.
+- **File:** decoder.vhd
+- **Brief:** Dynamic Combinational Instruction Decoder
+- **Details:** Decodes a 6-bit instruction into kernel radius (bits 5:4), accelerator unit select (bit 3), and filter opcode (bits 2:0), generating 49 spatial filter weights and divisor.
 
 ## Diagram
-![Diagram](DECODER.svg "Diagram")
-## Description
 
+![Diagram](DECODER.svg "Diagram")
 
 ## Ports
 
@@ -28,6 +27,9 @@
 | op_code   | STD_LOGIC_VECTOR(2 DOWNTO 0) | Lower 3 bits of instruction selecting filter operation opcode [2:0] |
 
 ## Processes
-- decode_proc: ( size_code, op_code )
-  - **Description**
-  Combinational kernel weights and divisor lookup process
+
+- decode_proc
+  - This process has a sensitivity list of size_code and op_code
+  - This process decodes the 6-bit instruction into kernel radius, unit select, and filter opcode, generating the corresponding 49 spatial filter weights and divisor
+
+> The 49 spatial filter weights are generated based on the decoded kernel radius and filter opcode, allowing for dynamic configuration of the convolution operation. The divisor is also determined based on the selected filter to ensure proper normalization of the output pixel values.
