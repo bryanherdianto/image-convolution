@@ -176,34 +176,34 @@ The state diagram depicts the finite state machine controlling data streaming an
 
 The table below presents the filtered output images generated from the ModelSim hardware simulation. Both the ALU and MMU execution units produce bit-for-bit identical output images across all 25 filter configurations.
 
-|   #   | Kernel Filter                     |                     Image                     |
-| :---: | :-------------------------------- | :-------------------------------------------: |
-| input | Original Input Image              |              ![](src/input.bmp)               |
-|  01   | $1 \times 1$ Identity Passthrough | ![](sim/out_1x1_identity_passthrough_alu.bmp) |
-|  02   | $3 \times 3$ Box Blur             |       ![](sim/out_3x3_box_blur_alu.bmp)       |
-|  03   | $3 \times 3$ Horizontal Edge      |   ![](sim/out_3x3_horizontal_edge_alu.bmp)    |
-|  04   | $3 \times 3$ Vertical Edge        |    ![](sim/out_3x3_vertical_edge_alu.bmp)     |
-|  05   | $3 \times 3$ Laplacian            |      ![](sim/out_3x3_laplacian_alu.bmp)       |
-|  06   | $3 \times 3$ Sharpening           |      ![](sim/out_3x3_sharpening_alu.bmp)      |
-|  07   | $3 \times 3$ Sobel Horizontal     |   ![](sim/out_3x3_sobel_horizontal_alu.bmp)   |
-|  08   | $3 \times 3$ Sobel Vertical       |    ![](sim/out_3x3_sobel_vertical_alu.bmp)    |
-|  09   | $3 \times 3$ Custom               |        ![](sim/out_3x3_custom_alu.bmp)        |
-|  10   | $5 \times 5$ Box Blur             |       ![](sim/out_5x5_box_blur_alu.bmp)       |
-|  11   | $5 \times 5$ Horizontal Edge      |   ![](sim/out_5x5_horizontal_edge_alu.bmp)    |
-|  12   | $5 \times 5$ Vertical Edge        |    ![](sim/out_5x5_vertical_edge_alu.bmp)     |
-|  13   | $5 \times 5$ Laplacian            |      ![](sim/out_5x5_laplacian_alu.bmp)       |
-|  14   | $5 \times 5$ Sharpening           |      ![](sim/out_5x5_sharpening_alu.bmp)      |
-|  15   | $5 \times 5$ Sobel Horizontal     |   ![](sim/out_5x5_sobel_horizontal_alu.bmp)   |
-|  16   | $5 \times 5$ Sobel Vertical       |    ![](sim/out_5x5_sobel_vertical_alu.bmp)    |
-|  17   | $5 \times 5$ Gaussian Blur        |    ![](sim/out_5x5_gaussian_blur_alu.bmp)     |
-|  18   | $7 \times 7$ Box Blur             |       ![](sim/out_7x7_box_blur_alu.bmp)       |
-|  19   | $7 \times 7$ Horizontal Edge      |   ![](sim/out_7x7_horizontal_edge_alu.bmp)    |
-|  20   | $7 \times 7$ Vertical Edge        |    ![](sim/out_7x7_vertical_edge_alu.bmp)     |
-|  21   | $7 \times 7$ Laplacian            |      ![](sim/out_7x7_laplacian_alu.bmp)       |
-|  22   | $7 \times 7$ Sharpening           |      ![](sim/out_7x7_sharpening_alu.bmp)      |
-|  23   | $7 \times 7$ Sobel Horizontal     |   ![](sim/out_7x7_sobel_horizontal_alu.bmp)   |
-|  24   | $7 \times 7$ Sobel Vertical       |    ![](sim/out_7x7_sobel_vertical_alu.bmp)    |
-|  25   | $7 \times 7$ Custom/Gaussian      |   ![](sim/out_7x7_custom_gaussian_alu.bmp)    |
+|  #  | Kernel Filter                     |                     Image                     |
+| :-: | :-------------------------------- | :-------------------------------------------: |
+| 00  | Original Input Image              |              ![](src/input.bmp)               |
+| 01  | $1 \times 1$ Identity Passthrough | ![](sim/out_1x1_identity_passthrough_alu.bmp) |
+| 02  | $3 \times 3$ Box Blur             |       ![](sim/out_3x3_box_blur_alu.bmp)       |
+| 03  | $3 \times 3$ Horizontal Edge      |   ![](sim/out_3x3_horizontal_edge_alu.bmp)    |
+| 04  | $3 \times 3$ Vertical Edge        |    ![](sim/out_3x3_vertical_edge_alu.bmp)     |
+| 05  | $3 \times 3$ Laplacian            |      ![](sim/out_3x3_laplacian_alu.bmp)       |
+| 06  | $3 \times 3$ Sharpening           |      ![](sim/out_3x3_sharpening_alu.bmp)      |
+| 07  | $3 \times 3$ Sobel Horizontal     |   ![](sim/out_3x3_sobel_horizontal_alu.bmp)   |
+| 08  | $3 \times 3$ Sobel Vertical       |    ![](sim/out_3x3_sobel_vertical_alu.bmp)    |
+| 09  | $3 \times 3$ Custom               |        ![](sim/out_3x3_custom_alu.bmp)        |
+| 10  | $5 \times 5$ Box Blur             |       ![](sim/out_5x5_box_blur_alu.bmp)       |
+| 11  | $5 \times 5$ Horizontal Edge      |   ![](sim/out_5x5_horizontal_edge_alu.bmp)    |
+| 12  | $5 \times 5$ Vertical Edge        |    ![](sim/out_5x5_vertical_edge_alu.bmp)     |
+| 13  | $5 \times 5$ Laplacian            |      ![](sim/out_5x5_laplacian_alu.bmp)       |
+| 14  | $5 \times 5$ Sharpening           |      ![](sim/out_5x5_sharpening_alu.bmp)      |
+| 15  | $5 \times 5$ Sobel Horizontal     |   ![](sim/out_5x5_sobel_horizontal_alu.bmp)   |
+| 16  | $5 \times 5$ Sobel Vertical       |    ![](sim/out_5x5_sobel_vertical_alu.bmp)    |
+| 17  | $5 \times 5$ Gaussian Blur        |    ![](sim/out_5x5_gaussian_blur_alu.bmp)     |
+| 18  | $7 \times 7$ Box Blur             |       ![](sim/out_7x7_box_blur_alu.bmp)       |
+| 19  | $7 \times 7$ Horizontal Edge      |   ![](sim/out_7x7_horizontal_edge_alu.bmp)    |
+| 20  | $7 \times 7$ Vertical Edge        |    ![](sim/out_7x7_vertical_edge_alu.bmp)     |
+| 21  | $7 \times 7$ Laplacian            |      ![](sim/out_7x7_laplacian_alu.bmp)       |
+| 22  | $7 \times 7$ Sharpening           |      ![](sim/out_7x7_sharpening_alu.bmp)      |
+| 23  | $7 \times 7$ Sobel Horizontal     |   ![](sim/out_7x7_sobel_horizontal_alu.bmp)   |
+| 24  | $7 \times 7$ Sobel Vertical       |    ![](sim/out_7x7_sobel_vertical_alu.bmp)    |
+| 25  | $7 \times 7$ Custom/Gaussian      |   ![](sim/out_7x7_custom_gaussian_alu.bmp)    |
 
 ## More Information
 
